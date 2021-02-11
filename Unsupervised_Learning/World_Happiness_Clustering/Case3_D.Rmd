@@ -1,0 +1,392 @@
+---
+title: "TeamD_Case3"
+author: "Shine Yao, Tianyu Zhang, Lingyi Kong, Jason Meng"
+date: "3/20/2018"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+#load the package
+library(GGally)
+library(factoextra)
+library(ggplot2)
+```
+
+## Part I: Data Pre-processing
+```{r, echo=FALSE, warning=FALSE}
+#read the data
+whr_2017DB <- read.csv("whr_2017.csv")
+summary(whr_2017DB)
+
+#checking total missing data
+sapply(whr_2017DB,function(x) sum(is.na(x)))
+
+#visualize the correlation between variables
+ggcorr(whr_2017DB[,-1], label=TRUE, cex=3)
+
+#deal with the missing data,as kmeans can't handle data has NA values
+#impute with median
+whr_2017DB$LnGDPpc[is.na(whr_2017DB$LnGDPpc)] = median(whr_2017DB$LnGDPpc, na.rm = TRUE)
+whr_2017DB$LifeExp[is.na(whr_2017DB$LifeExp)] = median(whr_2017DB$LifeExp, na.rm = TRUE)
+whr_2017DB$LifeChoice[is.na(whr_2017DB$LifeChoice)] = median(whr_2017DB$LifeChoice, na.rm = TRUE)
+whr_2017DB$Generosity[is.na(whr_2017DB$Generosity)] = median(whr_2017DB$Generosity, na.rm = TRUE)
+whr_2017DB$Corruption[is.na(whr_2017DB$Corruption)] = median(whr_2017DB$Corruption, na.rm = TRUE)
+whr_2017DB$GDPpc[is.na(whr_2017DB$GDPpc)] = median(whr_2017DB$GDPpc, na.rm = TRUE)
+
+#drop the LifeLaddar and GDPpc column
+qplot(whr_2017DB$GDPpc, geom="histogram", main = "Histogram of GDP", xlab = "GDP", fill=I("blue"), col=I("red"),alpha=I(.4)) 
+qplot(whr_2017DB$LnGDPpc, geom="histogram", main = "Histogram of Ln(GDP)", xlab = "Ln(GDP)", fill=I("purple"), col=I("green"),alpha=I(.55))
+whr_2017_DF <- whr_2017DB[,-c(2,9)]
+
+```
+
+### Interpretation of Part I:
+
+* After reading the csv file, our group used the summary function to get a basic understanding of the content and structure of the file
+* Missing data can be a serious problem if we want to get access to the characteristics of our data and cluster them.Therefore, our group checked the missing value in the dataset by examing the correlation of each variables and replaced them with median value of the dataset. The reason why we used median number is that the median number won't be affected by extreme values in the dataset.
+* Then we visualized the correlation between variables in order to eliminate highly-correlated pairs, if existed. As we can see from the output, GDPpc and LnGDPpc are highly correlated, as they basically represent the same variable. So we need to drop one of them for further analysis.
+* In order to decide which one between GDPpc and LnGDPpc should be dropped, our group created the histogram of those two variables to check their distributions. From the output it can be found that Ln(GDP) is less skewwed than GDP data and more conforms with normal distribution. So we keep the Ln(GDP) and drop the GDP column from our dataset. 
+
+## Part II: Models without LifeLadder
+
+```{r, warning=FALSE}
+# Normalized the data
+whr_2017_DF.scaled<- scale(whr_2017_DF[,-1])
+
+#set row names
+row.names(whr_2017_DF.scaled) <-whr_2017_DF$country
+
+#build k-means model
+par(mfrow = c(1, 1))
+
+# Initialize total within sum of squares error: wss
+wss <- 0
+
+# Look over 3 to 8 possible clusters
+for (i in 1:8) {
+  # Fit the model: km.out
+  km.out <- kmeans(whr_2017_DF.scaled, centers = i, nstart = 20, iter.max = 50)
+  # Save the within cluster sum of squares
+  wss[i] <- km.out$tot.withinss
+}
+
+# Produce a scree plot
+plot(1:8, wss, type = "b", 
+     xlab = "Number of Clusters", 
+     ylab = "Within groups sum of squares")
+
+# Select number of clusters
+k <- 4
+
+# Build model with k clusters: km.out
+km.out <- kmeans(whr_2017_DF.scaled, centers = k, nstart = 50, iter.max = 50)
+
+# View the resulting model
+km.out
+
+#plotting profile plot of centroids 
+# plot an empty scatter plot
+plot(c(0), xaxt = 'n', ylab = "", xlab ="", type = "l",
+     ylim = c(min(km.out$centers), max(km.out$centers)), xlim = c(0, 6))
+
+# label x-axes
+axis(1, at = c(1:6), labels = colnames(whr_2017_DF.scaled), las = 2)
+
+# plot centroids
+for (i in c(1:4))
+lines(km.out$centers[i,], lty = i, lwd = 2, col = ifelse(i %in% c(1, 3, 5),
+                               "black", "dark grey"))
+#name clusters
+text(x = 0.5, y = km.out$centers[, 1], labels = paste("Cluster", c(1:4)))
+
+# Create hierarchical clustering model: hclust.out
+hclust.out <- hclust(dist(whr_2017_DF.scaled), method="complete")
+
+# Inspect the result
+summary(hclust.out)
+
+#prune the tree
+hclust.out_cut <- cutree(hclust.out, k = 4)
+
+#inspect the clusters
+hclust.out_cut
+
+#get size of each cluster
+table(hclust.out_cut)
+
+#plot the heatmap
+# set labels as cluster membership and utility name
+row.names(whr_2017_DF.scaled) <- paste(hclust.out_cut, ": ", row.names(whr_2017_DF.scaled), sep = "")
+
+#set color scheme
+col_set<- grep("blue",colors())
+h_col<- colors()[c(col_set[1:20])]
+
+#rev() reverses the color mapping to large = dark
+heatmap(as.matrix(whr_2017_DF.scaled), Colv = NA, hclustfun = hclust,
+        col=rev(h_col))
+
+#visualize each cluster for hierarchical clustering
+fviz_cluster(list(data = whr_2017_DF.scaled, cluster = hclust.out_cut))
+
+```
+
+### Interpretation of Part II:
+
+* In this section our group built clustering models without LifeLadder column. First we normalized the data to increase consistency and avoid problems brought by different units. Then, we set the row names to built the k-means and hierarchical models.
+* The number of clusters has been chosen as 4. Our decision is based on the outcome of screen plot. From the chart it can be seen that increasing number of clusters from 1 to 4 can significantly decreases the variation within each cluster, and including more than 4 clusters does not help decrease the inner variation that much. In reality, we faced a hard decision about whether to choose 3 or 4 clusters as the optimal k. After trying to plot models using both k=3 and k=4, we found that choosing k as 4 could give us a more clear visual presenting of the clusters. More specifically, in hierarchical model, using k as 4 splits one big, messy, and "unmeaningful" cluster into two smaller clusters, giving us more information and making it easier for us to understand the mechanism behind this clustering. 
+* We used complete method to build our hierarchical model, and generated a heatmap to better interpret the variation within each cluster. In order to be comparable with the k-mean method, the number of clusters of hierarchical model has also been set to be 4. 
+* Note that these two methods use different algorithms, so the labelings of the clusters catergorized by the two methods are not one to one correspondence. For example, cluster 1 of k-mean model does not equal to cluster 1 of hierarchical model.
+
+### Detailed Interpretation of Model Results:
+
+#### For K-means model, there are four clusters, and the size for each cluster is 31, 39, 53, 18; the five countries for each cluster are:
+* Cluster 1: Chile, China, Greece, Italy, Russia 
+* Cluster 2: Central African Republic, Chad, Congo, India, Kenya 
+* Cluster 3: France, Japan, Spain, United States, Poland
+* Cluster 4: Australia, Canada, Finland, United Kingdom, Germany
+
+#### Similar attributes of the countries within one cluster
+From the k-means model, four clusters has been generated and their respective attributes can be summarized as following:
+
+#### Cluster that has the highst happiness level: Cluster 4
+* Comparing to other clusters, countries in Cluster 4 are obviously the happiest country because they have the highest amount of GDP, the highest level of social support, the highest number of life expectancy, the highest level of freedom of life choice, the highest level of generosity and the lowest level of corruption. People live in those countries have the least economic trouble, and treat people around them very well. We believe countries in this cluster are highly-developed, and live a very happy life. 
+
+#### Cluster that has the lowest happiness level: Cluster 2
+* Countries in cluster 2 are easy to be identified, because they have the lowest amount of GDP, the lower level of social support and the lowest number of life expectancy. Based on these three metrics, it can be concluded that these countries are poor-developed, and have pessimistic economic perspectives. However, they do seem to have moderate level of freedom of life choice, the second highest level of generosity and the second lowest level of corruption. Still, our group believes that countries in this cluster represent the least happiness level. 
+
+#### Clusters that have the moderate happiness level: Cluster 1 & 3
+* Commonalities in cluster 1 & 3: Countries in cluster 1 & 3 have similar amount of GDP, similar level of social support, similar level of life expectancy and similar level of corruption. 
+* But they do have some differences: 
+Cluster 1: Countries in cluster 1 are less developed than countries in cluster 3. Those cluster 1 countries have the lowest level of life choice, the lowest level of generosity and the highest level of corruption. It can be inferred that the humanistic environments of these countries are not very good. 
+* Cluster 3: Countries in cluster 3 have the second highest level of freedom of choice but the second lowest level of generosity. These countries also have the second highest level of corruption (second only to countries in cluster 1).
+
+#### For hierarchical model, when cluster k = 4, the size for each cluster is 5, 80, 17, 39;the five countries for each cluster are:
+* Cluster 1: Afghanistan, Haiti, Chad, Central African Republic, South Sudan  
+* Cluster 2: South Korea, Spain, Russia, Japan, Italy  
+* Cluster 3: United Kingdom, Switzerland, Germany, Norway, New Zealand 
+* Cluster 4: Philippines, Nepal, Israel, Indonesia, South Africa 
+
+#### Similar attributes of the countries within one cluster:
+From the hierarchical model, four clusters have been generated and their respective attributes can be summarized as following:
+
+#### Cluster that has the highst happiness level: Cluster 3
+* From the heatmap, it can be seen that, comparing to those in other clusters, Countries in Cluster 3 are obviously the happiest countries, because they have the highest amount of GDP, the highest level of social support, the highest level of life expectancy, the highest level of freedom of life choice, the highest level of generosity and the lowest level of corruption. Typical countries in this cluster are Germany, Norway and New Zealand.People live in these countries have the least economic trouble, and treat people around them very well. Countries in this cluster are highly-developed and people are expected to live a very happy life. 
+
+#### Cluster that has the lowest happiness level: Cluster 1
+* Countries in cluster 1 are easy to be identified, because they have the lowest amount of GDP, the lower level of social support and the lowest level of life expectancy. Based on these three metrics, it can be concluded that these countries are poor-developed, and have pessimitic economic expectation. However, from the heatmap, it can be seen that they seem to have moderate level of freedom of life choice, the second highest level of generosity and the second lowest level of corruption (only second to some countries in cluster 2). In sum, our group believes that countries in this cluster represent the least happy countries. 
+
+#### Clusters that have the moderate happiness level: Cluster 2 & 4
+* Commonalities in cluster 2 & 4: Countries in cluster 2 & 4 have similar amount of GDP, similar level of social support and similar level of life expectancy. 
+* But they do have some differences. 
+Cluster 2: Countries in cluster 2 are more diversed than countries in cluster 4, because cluster 2 contains most countries in this model.Countries in cluster 2 face severe corruption problems, and show less generosity to other people. The levels of freedom of life choice vary in this cluster, but the overall level of freedom seems to be pretty high.
+* Cluster 4: The humanistic environments of cluster 4 are better than that of cluster 2. Countries in cluster 4 have the second highest level of freedom of choice and the second highest level of generosity. But those countries also face the second high level of corruption. 
+
+## Part III: Models with LifeLadder
+```{r}
+#add LifeLadder column
+whr_2017_DF_LL <- whr_2017DB[,-9]
+
+# Normalized the data
+whr_2017_DF_LL.scaled<- scale(whr_2017_DF_LL[,-1])
+
+#set row names
+row.names(whr_2017_DF_LL.scaled) <-whr_2017_DF$country
+
+#build k-means model
+par(mfrow = c(1, 1))
+
+# Initialize total within sum of squares error: wss
+wss <- 0
+
+# Look over 3 to 8 possible clusters
+for (i in 1:8) {
+  # Fit the model: km.out
+  km.out_LL <- kmeans(whr_2017_DF_LL.scaled, centers = i, nstart = 20, iter.max = 50)
+  # Save the within cluster sum of squares
+  wss[i] <- km.out_LL$tot.withinss
+}
+
+# Produce a scree plot
+plot(1:8, wss, type = "b", 
+     xlab = "Number of Clusters", 
+     ylab = "Within groups sum of squares")
+
+# Select number of clusters
+k <- 4
+
+# Build model with k clusters: km.out
+km.out_LL <- kmeans(whr_2017_DF_LL.scaled, centers = k, nstart = 50, iter.max = 50)
+
+# View the resulting model
+km.out_LL
+
+#plotting profile plot of centroids 
+# plot an empty scatter plot
+plot(c(0), xaxt = 'n', ylab = "", xlab = "", type = "l",
+     ylim = c(min(km.out_LL$centers), max(km.out_LL$centers)), xlim = c(0, 7))
+
+# label x-axes
+axis(1, at = c(1:7), labels = colnames(whr_2017_DF_LL.scaled), las = 2)
+
+# plot centroids
+for (i in c(1:4))
+lines(km.out_LL$centers[i,], lty = i, lwd = 2, col = ifelse(i %in% c(1, 3, 5),
+                               "black", "dark grey"))
+# name clusters
+text(x = 0.5, y = km.out_LL$centers[, 1], labels = paste("Cluster", c(1:4)))
+
+# Create hierarchical clustering model: hclust.out
+hclust.out_LL <- hclust(dist(whr_2017_DF_LL.scaled), method="complete")
+
+# Inspect the result
+summary(hclust.out_LL)
+
+#prune the tree
+hclust.out_cut_LL <- cutree(hclust.out_LL, k = 4)
+
+#inspect the clusters
+hclust.out_cut_LL
+
+#get size of each cluster
+table(hclust.out_cut_LL)
+
+#plot the heatmap
+# set labels as cluster membership and utility name
+row.names(whr_2017_DF_LL.scaled) <- paste(hclust.out_cut_LL, ": ", row.names(whr_2017_DF_LL.scaled), sep = "")
+
+# plot heatmap
+# rev() reverses the color mapping to large = dark
+heatmap(as.matrix(whr_2017_DF_LL.scaled), Colv = NA, hclustfun = hclust,
+        col=rev(h_col))
+
+#visualize each cluster for hierarchical clustering
+fviz_cluster(list(data = whr_2017_DF_LL.scaled, cluster = hclust.out_cut_LL))
+
+```
+
+### Interpretation of Part III:
+
+* In this section our group added back the LifeLadder column to our dataset. Same as the last part, first we normalized the data to increase consistency, and avoid problems brought by different units. Then we set the row names and built the k-means and hierarchical models.
+* The number of clusters has been chosen as 4. The main reason for this decision is the same as in the former case where we excluded the variable "Life Ladder". One more point is that after we tried different values for k (ranging from 3 to 6), the results indicate that the choice of 4 clusters is more meaningful, especially in this part where we add the variable "Life Ladeer". Although the results of our experiments are not all shown here, we do find that when number of clusters increases from 3 to 6, the most and least happy clusters barely change while the middle cluster is split into several new clusters. The case of 4 clusters with "Life Ladder" contains more information than 3 clusters and clustering without Life Ladder, which we will explain more in detail later. Further splits add less information, with the side effect that clustering becomes too specific and visualization plots becomes messy. 
+* We used complete method to build our hierarchical model, and generate a heatmap to better interpret the variation within each cluster. In order to be comparable with the k-mean method, the number of clusters of the hierarchical model has also been set to be 4. 
+
+### Detailed Interpretation of Model Results:
+
+### For K-means model, there are four clusters, and the size for each cluster is 33,38,52,18; the five countries for each cluster are:
+* Cluster 1: Bulgaria, China, Egypt, Greece, Italy
+* Cluster 2: Afghanistan, Central African Republic, Haiti, Indonesia, Ethiopia
+* Cluster 3: France, Japan, Thailand, Mexico, United States
+* Cluster 4: Australia, Belgium, Norway, Netherlands, Luxembourg
+* Note that the order of the four clusters does not reflect the rank of happiness. We will give the rank after we describe the similarities within each cluster.
+
+### Similar attributes of the countries within one cluster
+From the k-means model, four clusters have been generated and their respective attributes can be summarized as following:
+
+#### Cluster that has the highest happiness level: cluster 4
+* Countries in cluster 4 have the highest life ladder score, lnGDP per capita and generosity, longest life expectancy, highest level of social support and life choice, least corruption level way below the level of the other three clusters. Countries in this cluster are therefore of the highest happiness level. 
+* If we look into the countries in this cluster, we will find that they are among the most developed countries, with attractive natural environment, beautiful sceneries, stable political environment, sound social welfare systems, and pleasant life pace.
+
+#### Cluster that has the lowest happiness level: cluster 2
+* Countries in this cluster generally have the lowest life ladder score and lnGDP per capita, with least social support, shortest life expectancy, life choice more than cluster 1 but less than the other two, fair generosity only less than that of cluster 4, and higher corruption level (very close to cluster 1 and cluster 3's level). Countries in this cluster seem to have the lowest happiness score.
+* Countries in this cluster are totally opposite to those in cluster 4, in terms of material conditions. As most of them are among the least developed countries, they are struggling with problems such as poverty, illness, natural disasters, or conflicts due to unstable political environments. But the generosity level of this cluster is only lower than that of the happiest country cluster. It sometimes happens to some countries in poverty that the people unite together, making them care about others that share similar situation with them or worse. 
+
+#### Clusters that have the moderate happiness level: cluster 1 & 3
+* Things in common: Both cluster 1 and cluster 3 have moderate level of lnGDP per capital, social support and life expectancy. Life ladder scores higher than cluster 2 but lower than that of cluster 4. Apart from that, they both have high level of corruption that is very close to the corruption level of cluster 2. 
+* Cluster 1: Countries in cluster 1 seem to have very few life choices and least generosity, even though they are not in poverty. Most of them are developing countries that have good economic environment while their human rights may not as good as the other clusters. We believe this is a normal stage in the developing process. We find that most countries, like Egypt, China and Greece, have longer histories and unique cultures, and thus have their traditional thoughts that limit people's life choices to some extent. It definitely takes them longer time to figure out which part of the tradition to keep and which part to change in order to adapt to the world that is changing fast especially in the past 100 years. 
+* Cluster 3: Comparing to cluster 1, cluster 3 has higher levels of almost all variables except corruption. Life choices are much more and generosity level is much higher. We believe that these countries are at a stage ahead countries in cluster 1 in the developing process. As a result, we believe countries in cluster 3 are relatively happier than those in cluster 1.
+
+
+### For hierarchical model, when cluster k=4, the size for each cluster is 5,42,76,18;the five countries for each cluster are:
+* Cluster 1: Afghanistan, Haiti, Chad, South Sudan,Central African Republic
+* Cluster 2: India, Ethopia, South Africa, Benin, Kenya
+* Cluster 3: China, France, Greece, Italy, United States
+* Cluster 4: Australia, Iceland, New Zealand, Norway, United Kingdom
+* Note that different from the k-means method, the order of the four clusters here is consistent with the rank of happiness. Therefore, the numbers are not the same as those in k-means method. 
+* In the heatmap, countries within the same cluster stick together, but the clusters are not in the order of their ranking of happiness level. The order in the heatmap is 4, 1, 3, 2 from the happiest to the least happy one.
+
+### Similar attributes of the countries within one cluster:
+It is not as easy to compare average variable levels among clusters with hierarchical model as with k-means model, but we still have some obvious findings:
+
+#### Cluster that has the highest happiness level: cluster 4
+* We define cluster3 as the happiest cluster, since it is obvious that countries in cluster3 all have the least corruption, while the other variables have higher level than most of the other countries.
+
+#### Cluster that has the lowest happiness level: cluster 1
+* Among all countries, countries in cluster 1 have lowest life ladder score and least life choice, lower level of lnGDP per capital, social support and life expectancy. They also have highest generosity and corruption level. Therefore they seem to be the least happy countries.
+
+#### Clusters that have the moderate happiness level: cluster 2 & 3
+* Things in common: It's obvious that most countries in these two clusters have moderate corruption level and life ladder score. But it is hard to compare the average level of these two clusters with the levels of the other two clusters, because the hierarchical method does not show the average level in the heatmap. And both cluster 2 and cluster 3 have high variation within cluster than the other two clusters. These are big weakness of this method.
+* Comparing cluster 2 with cluster 3, we find that countries in cluster 3 generally have higher life ladder score, higher lnGDP per capita, lower level generosity and corruption level. But without the average level shown, we cannot tell the differences in life choice and life expectancy. We can see the in-cluster variation of these variables are significant from the heatmap.
+
+## Part IV:Impact of Happiness Life Ladder 
+
+The Life Ladder index shows how happy people think their life is. Comparing to other factors, Life Ladder appears to be a subjective measure and is more or less correlated with GDP and other factors. But after adding this variable to our analysis, our group find out that the models which contain this variable do capture something different and we think this Life Ladder variable is valuable to our analysis.
+
+* After adding the Life Ladder variable, the between ss/total ss ratio increased from 56.9% to 59%, indicating a better fit of our k-mean model.
+* Adding the Life Ladder variable changed the graphic output of hierarchical model. From the cluster plot, it can be seen that the clusters of the model without Life Ladder, especially cluster 2 and 4, seem to be highly overlapped. It makes us very different to derive information from the chart. In contrast, the clusters of the model which contains Life Ladder seems to be less overlapped, and each cluster has its own characteristics for us to classify. It seems that the Life Ladder variable further helps us to differentiate the countries. 
+* Sometimes the statistical data may not be able to fully represent what people really think about that country. The life ladder variable is the most powerful variable to idenify people's thoughts. External circumstances will not totally determine how people define happiness. For example, Iceland in the hierarchical model is an example where people still feel happy, even though the government declared bankruptcy, and corruption is a serious trouble. As a result, Iceland is identified as a country that is moderately happy when we exclude Life Ladder from the factors; it is identified as a country that is highly happy when we include Life Ladder in the factors. In this case, people's attitude matters because it is an important spiritual reference despite the exogenous factors. 
+
+
+## Part V:Most Meaningful Model (chosen by our group)
+
+* Our group thinks that the k-means model with Life Ladder is the most meaningful model.
+* The output generated by the hierarchical model is too messy to be interpreted (non-interpretable). Every country has its own unqiue characteristics that make it difficult for us to get the mean value, or the average performace of each cluster. In contrast, the centroid profile plot of k-means model delivers a clear, understandable and useful message which is easier for us to get the key characteristics of each cluster.
+* K-means plot can also present the inner variation within each cluster by plotting each country's data, and its visual effect is still better than hierarchical model's. 
+* By including Life Ladder, the model takes both objective factors and subjective attitude into consideration. The between ss/total ss ratio increased from 56.9% to 59%, indicating a better model performance. 
+* In this k-means model, Cluster 1 can be labelled as "moderate economic development/low life choice", Cluster 2 can be labelled as "poor economic development/high generosity", Cluster 3 can be labelled as "moderate economic development/high life choice" and Cluster 4 can be labelled as "high economic development/low corruption".  
+
+## Part VI:Is it accurate to generalize Tolstoy’s assertion to countries as well as families?
+
+
+CLuster #|Models with Life Ladder | Variance |         |Models without Life Ladder | Variance |  
+---------|------------------------| ---------| --------|---------------------------|----------|
+Cluster 1|100.50670/33            |   3.05   |         |      78.67993/31          |   2.55   |
+Cluster 2|164.33184/38            |   4.32   |         |      156.39218/39         |   4.01   |
+Cluster 3|109.33138/52            |   2.10   |         |      103.28379/53         |   1.95   |
+Cluster 4|28.01125/18             |   1.56   |         |      23.99144/18          |   1.33   |
+   
+Yes, our group believes that it is accurate to generalize Tolstey's assertion to countries as well as families based on our above analysis.
+
+* The k-means table above shows the variances of different clusters with different input variables. Cluster 4 is the happiest one and cluster 2 is the least happy one. It can be seen that, in both cases, cluster 4 which contains the happiest countries has the least variance, indicating their high similarity. On the other hand, cluster 2, which contains the least happy countries has the highest variance, which delivers the message that countries in this group have the highest diversity. Those variance numbers are consistent with Tolstoy's saying. 
+* We can also derive the conclusion from the graphic output of our models. In the “happy country” cluster of the hierarchical model, we observe roughly similar characteristics of each country. Almost all of them have high Life Ladder, GDP per capita, social support, life expectancy, life choice, generosity and low corruption. However, countries in the “unhappy country” cluster show more variety in their characteristics. For example, Haiti has relatively high generosity, but its performance in life choice and corruption is extremely poor; Central African Republic has relatively high GDP per capita, but its performance in social supply and corruption is really unsatisfying. 
+  
+## Part VII: Reflections of the two clustering methods
+
+#### Strength of k-means method:
+* Easier to figure out the general characteristics for variables of each cluster, because the lines show the average value of each variable.
+* Easier to compare between different clusters.
+* Can show in-cluster variation by calculating Var as SSR/N, where N is the number of countries in that cluster, or by ploting the lines of all countries in that cluster.
+
+#### Weakness of k-means method:
+* When we add or change a variable, it’s hard to find out how and why the result is changed from the plot. The only way is to compare two long lists containing country names and cluster numbers.
+
+#### Strength of hierarchical method:
+* Shows both the processes and results of clustering with a dendrogram.
+* With the heatmap, we are able to view each country’s scores of all variables, and compare it with all other countries within or out of its cluster. 
+* Can show members of three clusters in a scatter plot. Therefore it’s easy to check the impact of adding/changing a variable on the results. For example, we find that Iceland changes cluster after we add the Life Ladder column.
+* Purely data driven. There is no need to predetermine a k value. We can decide number of clusters after observing the clustering dendrogram.
+
+#### Weakness of hierarchical method:
+* The heatmap does not show the average level of a cluster. So we can summarize a cluster’s characteristics of one variable only when the variation is small. Taking the example of life choice variable, with significant variation, we cannot compare the average levels between cluster 2 and cluster 3.
+* Comparing to k-means model which reassigns countries till the clusters barely change, hierarchical method only assigns one data once, thus there is no chance to reassign if there is a mistake.
+* Depending too much on the status of data. If data changes, such as dropping some rows, the result may be influenced to a large extent.
+
+#### Other comments
+* Choice of a better model: The two methods both have strengths and limitations. The hierarchical method seems to be able to provide more information, such as the process of clustering, and each country's performance within one graph. But choosing the model is really a case-by-case choice. In this case, what we care most is clear differences between clusters and the degree of in-cluster variation. The k-means model just satisfied our demand and the clear and meaningful graph outperforms the heatmap of the hierarchical method.
+* Potential improvements: When trying to analyze the reasonability of the clustering results, we find some similarities among countries in the same cluster that definitely has influence in happiness. However, they are not included in the current model, such as war and political environment. In the future improvement, we can consider adding more variables like them into the happiness clustering model, if further analysis on the new variables does not show a likelihood of significant side effect. 
+
+=======
+
+
+### Reference
+* [1].https://rpubs.com/mohammadshadan/273129
+* [2].https://www.kaggle.com/unsdsn/world-happiness/kernels
+* [3]https://stat.ethz.ch/R-manual/R-devel/library/stats/html/kmeans.html
+* [4]http://uc-r.github.io/hc_clustering
+* [5]Data Mining for Business Analytics
+* [6]https://rstudio-pubs-static.s3.amazonaws.com/93706_e3f683a8d77244a5b993b20ad6278f4b.html
