@@ -1,0 +1,266 @@
+---
+title: "Classifying-Portuguese-Red-Wines"
+author: "Shine Yao"
+date: "3/5/2018"
+output:
+  word_document: default
+  pdf_document: default
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+#Load the library
+```{r}
+library(readr)
+library(tidyverse)   
+library(ggplot2)     
+library(tidyr)       
+library(rpart)
+library(rpart.plot)
+library(caret)
+library(openxlsx)
+library(randomForest)
+library(class)
+library(nlme)
+library(FNN)
+library(sjPlot)
+library(Metrics)
+library(adabag)
+```
+# Part I: Data Preparation
+```{r}
+#read_lines, plese set working directory to project directory
+
+red <- read.csv("winequality-red-v2.csv")
+
+summary(red)
+str(red)
+head(red,5)
+
+#Data Exploration
+red %>% ggplot(aes(x=quality,fill = factor(quality))) + 
+  geom_bar() +
+  labs(x = 'Quality', y = 'Count', title = 'Quality Distribution') +
+  scale_fill_discrete(name="Quality")+
+  theme_bw()
+
+# Creating quality levels
+red$quality_level = "0"
+red[red$quality == 3 | red$quality == 4,]$quality_level = "Poor"
+red[red$quality == 5 | red$quality == 6,]$quality_level = "Normal"
+red[red$quality == 7 | red$quality == 8,]$quality_level = "Excellent"
+table(red$quality_level)  
+
+#get rid of quality column
+red <- red[,-12]
+
+red %>% ggplot(aes(x=quality_level, fill = factor(quality_level))) + 
+  geom_bar() +
+  labs(x = 'Quality Level', y = 'Count', title = 'Quality Level Distribution') +
+  scale_fill_discrete(name="Quality Level")+
+  theme_bw()
+
+#format columns name,this step is very important
+colnames(red) <- c("fixed_acidity", "volatile_acidity", "citric_acid","residual_sugar", "chlorides", "free_sulfur_dioxide", "total_sulfur_dioxide", "density", "pH", "sulphates", "alcohol", "quality_level")
+
+#check if there is null value in predictors
+lapply(red, function(x) any(is.na(x)))
+
+#replace na value as 0
+red[is.na(red)] <- 0
+
+#check again if there is null value in predictors
+lapply(red, function(x) any(is.na(x)))
+
+# Set random seed.
+set.seed(111)
+
+# Shuffle the dataset; build train and validation at 8:2
+red_train_index<- sample(row.names(red), 0.8*dim(red)[1])
+red_valid_index<- setdiff(row.names(red), red_train_index)
+red_train <- red[red_train_index, ]
+red_valid <- red[red_valid_index, ]
+
+#check if there is null value in predictors
+#lapply(red_train, function(x) any(is.na(x)))
+#lapply(red_valid, function(x) any(is.na(x)))
+
+```
+### Data Preparation:
+Our group need to explore the data first in order to get the quality disturbution as well as the relevant predictors. Using summary() function and head() function, we get a basic understanding of what the predictors are and how the quality results vary according to different parameter inputs. 
+
+Before we convert the numberic quality factors into categorical factors, our group create a ggplot of quality to see its distributions. According to the chart, the wine's quality mainly concentrated in 5 and 6, which indicates that most of wine's quality remains at normal level. 
+
+In order to further confirms our thought, we convert quality factor into categorical factor and create a new column for quality levels. "Poor level" contains wines with quality rating of 3 or 4; "Normal level" contains wine with quality rating of 5 or 6; "Excellent level" contains wine with quality rating of 7 or 8. Now that we have already created a new column for categorical quality level, we can get rid of the original numberical quality column, which is executed by function red <- red[,-12], in order to avoid future confusion. 
+
+Then we create another ggplot for the new quality level and now we can see more clearly of its level distributions. The wine's quality mainly concentrated on normal level, and the poor level shows the least frequency in our dataset. 
+Since R cannot recognize variables whose name contains blank space, our group also reformat the column names, adding underline between two words. This step is very important, otherwise our whole dataset cannot be processed by R. 
+
+Missing value can be a serious problem if we want to build models (e.g. random forest) to predict wine's quality. Therefore, our group checked the missing values in the dataset and replaced those missing values with number "0". After replacing, we check again to make sure those missing values have been successfully replaced and won't affect our prediction. 
+
+At the end of data preparation, our group set random seeds and split the data randomly into training (80%) and validation sets (20%). 
+
+# Part II: Model Construction and Evaluation
+## 1."best-pruned tree" (with cross-validation)
+```{r}
+
+set.seed(111)
+
+# classification tree
+winequality.ct <- rpart(quality_level~ ., data = red_train, method = "class", cp = 0.00001, minsplit = 30, xval = 5)
+# Print cross-validation table
+printcp(winequality.ct)
+
+# prune by lower cp
+pruned.ct <- prune(winequality.ct, 
+                   cp = winequality.ct$cptable[which.min(winequality.ct$cptable[,"xerror"]),"CP"])
+
+# check the length
+length(pruned.ct$frame$var[pruned.ct$frame$var == "<leaf>"])
+
+# build the tree model using pruned data
+treemodel <- prp(pruned.ct, type = 1, extra = 1, under = TRUE, split.font = 1, varlen = -10)
+
+
+# predict the wine quality level using pruned method
+pred_result <- predict(pruned.ct, red_valid, type = "class")
+
+confusionMatrix(data = pred_result, reference = red_valid$quality_level)
+
+```
+### "Best-pruned tree"
+Firstly, we still need to create a normal tree using training data. Next, we print a cross validation table for the tree we created, to manually get a sense that we are adopting the cp level with the lowest xerror in the pruned method later. We then command R to pick the optimized cp value, and apply the prune function. In this process, a lot of "branches" of the tree are cut off, since the prune methods thinks these factors are less important in predicting. The pruned tree then can be plotted. Finally, we can use the valid data set to test the accuracy of this pruned tree. However, the result does not seem to be satisfying, since the accuracy of this model is lower than the no information rate.
+
+## 2.Boosted tree approach
+```{r}
+#set the same seed
+set.seed(111)
+
+#transform quality_level into categorical variable
+red_train$quality_level = as.factor(red_train$quality_level)
+
+#boosted tree
+red_model_bst <- boosting(quality_level ~ ., data = red_train,mfinal = 90,
+                         control = rpart.control(cp = 0.001, minsplit = 35))
+
+#validation and confusion matrix
+bst_pred <- predict(red_model_bst, red_valid, type = "class")
+confusionMatrix(bst_pred$class, red_valid$quality_level)
+```
+### Boosted tree approach
+Boosted tree approach generates a series of trees basing on a single tree. According to the result of the first tree, it focuses more on missclassified data in the this tree by giving higher probability to these data to be selected into the sample for a new tree. Then it fit the model with the sample and refines the model by repeating generating new samples and fitting the model. 
+
+For this model, we set the same seed with the previous model, and transform dependent variable "quality_level" into an categorical variable, then train the model with the training data. In this process we need to set three parameters:
+    i. Mfinal that represents the number of trees generated in the model.
+   ii. Complexity parameter (cp), the punishment to the model for overfitting.
+  iii. Minimal split (minsplit), the minimal number of obervations in a node to split.
+
+We did experiments in order to figure out the optimal set of parameters that returns the highest accuracy. We find out that as mfinal increases, accuracy of boosted tree rises to a peak at mfinal=90 and then drops, just like a downward parabola. Decrease in cp increases accuracy, but the influence dwindles and becomes neglectable when cp is less than 0.001, so we choose 0.001 as the optimal cp value. Accuracy fluctuates as we increase minimal split (minsplit) and hardly shows any regularity. Therefore we just choose the minsplit value that gives the highest accuracy, which is 35.
+
+After building the model, we test the model with validation data, and record the performance of the boosted tree with confusion matrix. This approach has an accuracy of 0.8668, nearly 0.05 higher than no information rate. It does great in predicting "Normal" wines, but not so well in identificating "Excellent" and "Poor" wines. For the validation data, the model misclassified 49% of the "Excellent" wines and 79% of the "Poor wines", according to the sensitivity analysis.
+
+## 3.bagged tree approach
+```{r}
+#set the same seed
+set.seed(111)
+
+#bagged tree
+red_model_bag <- bagging(quality_level ~ ., data = red_train, mfinal = 30,
+                         control = rpart.control(cp = 0.001, minsplit = 30))
+
+#validation and confusion matrix
+bag_pred <- predict(red_model_bag, red_valid, type = "class")
+confusionMatrix(bag_pred$class, red_valid$quality_level)
+```
+### Bagged tree approach
+Similar to boosted tree, bagging is an approach that also generates a series trees to refine one model. The difference is that bagging uses random samples instead of paying more attention to the previously misclassified data. 
+
+Similar to the boosted tree, we also set up three parameters, mfinal, cp and minsplit. We did same research for the relationship between accuracy of bagged tree and parameters and found out similar pattern as in boosted tree. We figure out and use the best set of parameters that maximize the accuracy in this model. 
+
+With the same validation data, the highest accuracy of bagged tree is 0.85, also higher than the no information rate. And the model is very good at identifying "Normal" class. However, it cannot return any "Poor" wine in the validation data.
+
+## 4.Random forest approach
+```{r}
+#set the same seed
+set.seed(111)
+
+#random forest
+red_model_rf <- randomForest(as.factor(quality_level) ~ ., data = red_train,importance = TRUE,na.action = na.roughfix)
+
+#print the model output
+print(red_model_rf)
+
+plot(red_model_rf, main = "Out of Bag Error and Tree Size")
+legend(x = "right", 
+       legend = colnames(red_model_rf$err.rate),
+       fill = 1:ncol(red_model_rf$err.rate))
+
+#variable importance plot
+varImpPlot(red_model_rf, type = 1,main = "Mean Decrease Accuracy Table")
+
+#confusion matrix
+rf_pred <- predict(red_model_rf, red_valid)
+confusionMatrix(rf_pred, red_valid$quality_level)
+
+```
+### Random forest approach 
+Random forest is a special version of bagged tree. But for each new tree generated, it uses ramdom subset of predictors so that it not only reduces the risk of overfitting but also take different importance of variable into consideration. So it can be seen as an improvement of normal bagged tree. 
+
+This model improves the accuraty to 0.8531 and performs well in predicting "Nomal" class. But the model still does not solve the problem of predicting zero "Poor" class. We also made two plots, one for the relationship of error rate and number of trees in the "forest", the other for the importance of 11 predictors.
+
+We are able to identify the most predictive variables using random forest approach. From the output plot of random forest, it can be found that the most powerful three predictors are alcohol, sulphates and volatile acidity. The importance of total sulfur dioxide comes after them. If we eliminates alcohol from our model, the accuracy of our model would decrease by more than 40 percents. Those three or four most predictive variables carry most information about our model. 
+
+## 5.K-nearest neighbors approach
+```{r}
+#initialize normalized training, validation data
+red_train_norm <- red_train
+red_valid_norm <- red_valid
+red_norm <- red
+
+# use preProcess() from the caret package to normalize all predictors
+norm.values <- preProcess(red_train[, 1:11], method = c("center", "scale") )
+red_train_norm[, 1:11] <- predict(norm.values, red_train[, 1:11])
+red_valid_norm[, 1:11] <- predict(norm.values, red_valid[, 1:11])
+red_norm[, 1:11] <- predict(norm.values, red[, 1:11])
+
+# find the best k for model by using cross-validation
+knnFit <- train(quality_level ~ ., data = red_train_norm, method = "knn",trControl = trainControl(method = "cv"), preProcess = c("center","scale"), tuneLength = 20)
+
+predict(knnFit)
+plot(knnFit, main = "Accuracy and Neighbors")
+
+# find the best k for model by using Elbow criterion
+sjc.elbow(red_norm[,-12], show.diff = TRUE)
+
+#create class vector from train/valid set
+red_train_label <- red_train_norm$quality_level 
+red_valid_label <- red_valid_norm$quality_level
+
+#build the best knn model
+red_knn_pred <- knn(train = red_train_norm[ ,1:11], test = red_valid_norm[,1:11], cl = red_train_label, k = 3, prob = TRUE)
+
+# Create a confusion matrix of the actual versus predicted values
+confusionMatrix(red_knn_pred, red_valid_norm$quality_level)
+
+```
+### K-nearest neighbors approach
+K-nearest neighbors, the KNN approach is to classify validation data by finding the most similar (closest) training samples. There are two key steps to build a best knn model for our data. The first one is normalization, and the second is to find the best k, the number of close sample we need to classify a new data point.In order to find the best k, we use cross-validation method to see how accuracy will be imporoved as k changes. We also use Elbow criterion together with cross-validation to check the best k for our model. Apart from finding the best k, we also like to know whether dimension reduction will help us improve our model, so we choose 3 to 4 most important predictors from random forest model to build a new knn model, but then we find our model accuracy decreases. So finally, we decide still to use all variables in our knn model. Even like this, the accuracy of this model is still lower than no information rate as well as other 4 models.
+
+## Final Choice
+Boosted tree model seems to be the most accurate one based on above analysis. The statistics summarize table is shown below. In this table, S(E) refers to sensitivity for predicting excellent class, P(E) refers to specificity for predicting excellent class, S(N) refers to sensitivity for predicting normal class, P(N) refers to specificity for predicting normal class, S(P) refers to sensitivity for predicting poor class and P(P) refers to specificity for predicting poor class.
+
+Model(s)      | Accuracy | P-Value |  S(E) |  P(E) | S(N) | P(N) |  S(P)  | P(P)   |
+--------------| ---------| --------|-------|-------|------|------|--------|--------|
+Pruned tree   | 0.8156   | 0.6476  |0.34884|0.94585|0.9316|0.2807|0.071429|0.990196|
+Boosted tree  | 0.8688   | 0.01457 |0.51163|0.96751|0.9628|0.4386|0.214286|0.996732|
+Bagged tree   | 0.85     | 0.1054  |0.34884|0.97834|0.9772|0.2632|0.000000|1.000000|
+Random forest | 0.85     | 0.1054  |0.37209|0.9734 |0.9747|0.2807|0.00000 |1.00000 |
+KNN approach  | 0.8188   | 0.5925  |0.48837|0.92780|0.9125|0.3860|0.071429|0.990196|
+ 
+From the table, it can be found that boosted tree has the highest accuracy and most significant P-value. In fact the predict results of models other than boosted tree model are not significant at all. Among those models, boosted tree model has the strongest ability to predict true negative values of poor class, and this is the most place where it outperforms other four models. The confusion matrixes of those five models has been reorganized into above table, and they gives us a clear picture that boosted tree has the most predictive power in almost every aspect. 
+
+Random forest approach can produce “variable importance" scores table and can help us to identify the relative contribution of the different predictors. From the importance score table, we know that alcohol, sulphates and volatile acidity carry the most informative value. The importance score for a particular predictor is computed by summing up the decrease in the Gini index for that predictor over all the trees in the forest. Boosted tree and bagged tree do not have this attributes since those models automatically their preferred variables and conduct predication based on those preferred variables. 
+
