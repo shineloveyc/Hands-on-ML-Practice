@@ -1,0 +1,711 @@
+---
+title: "Final_Project"
+author: "Shine Yao"
+date: "4/28/2018"
+output:
+  word_document: default
+  html_document: default
+---
+
+### load the packages
+```{r}
+library(caret)
+library(mlbench)
+library(knitr)
+library(dplyr)
+library(ggplot2)
+library(ggmap)
+library(mapproj)
+library(GGally)
+library(jtools)
+library(openxlsx)
+library(lubridate)
+library(qdap)
+library(magrittr)
+library(igraph)
+library(tm)
+library(tidytext)
+library(tidyverse)
+library(randomForest)
+library(rpart)
+library(WVPlots)
+library(Metrics)
+library(MASS)
+library(RWeka)
+library(textmineR)
+```
+
+## Executive Summary
+
+Our group stands at Airbnb.com's perspective and try to help Airbnb households to identify the most reasonable pricing strategy. Before digging into the datasets and conducting analysis, our group took a step back and considered what factors might affect pricing. Several questions raised in order to solve the problem: Does location have impact on Airbnb rental pricing? What traits of the property are most related to house pricing, such as customer review, amenities and number of bedrooms? 
+In order to get enough information and figure out questions above, our group merged four datasets including Listings, Reviews, Boston_Property, and Calendar. We chose Listings dataset as the base dataset and deleted/added related column to it; the new columns are mostly derived from other four datasets. 
+
+A revised dataset based on Listings was created after dealing with missing data and conducting dimension reduction as well as data frame transformation. Price has been chosen as the target variable, since identifying an appropriate pricing strategy is the main goal of this paper. Then we visualized the correlation of price and all numeric variables excluding high-correlated variables. Three models have been developed in order to assess our choice. After results comparison and a further assessment of each method, stepwise regression model shows most accuracy, and we believe can help Airbnb households to develop a more appropriate pricing strategy. 
+
+From the model results and the analysis process, we generated several key findings that are useful to share: 
+* Prices of roperties located at downtown area are significantly higher than those located at suburb  
+* Number of bathrooms has a significant impact on the price of properties.
+* Five most common amenities are: "Wireless Internet", "Smoke Detector", "Air Conditioning", "Carbon Monoxide" and "Monoxide Detector"
+* Properties with a strict cancellation policy tends to be ones with a higher price
+* Boat house appears to be very popular in Boston, which has a significant higher price than others 
+
+## Introduction
+
+Before investigating into the data, it is worthwhile to pause and think about our problems and goals. The target of our analysis is to make recommendations on Airbnb households’ pricing strategy. Therefore, in our analysis, the most important point is to figure out which variables determine the price. The first several variables came to our mind are the property’s internal structures, property’s location and renting timing. Then we raised several questions such as: what traits attract customers most and make them willing to pay more? Does location matters to Airbnb customers? Does timing affects customer’s choice?... In below parts we began to conduct detailed data cleaning and model building process. 
+
+## Data Source
+As stated above, our group created a new dataset with the Listings as the base dataset. The dataset is called List_DF_Two_NoNA and all three models are built based on this big dataset. Each model chooses its own needed variables from this dataset based on their different natures and analysis purposes. The variables and their sources are identified below. Note that the data cleaning steps for those variables are discussed in detail in later sections.
+
+#### Variables about host
+* Host_response_time from Listings Dataset
+* Host_is_superhost from Listings Dataset
+* Host_has_profile_pic from Listings Dataset
+* Host_identity_verified from Listings Dataset
+
+#### Variable about neighbourhood
+* Neighbourhood from Listings Dataset
+
+#### Variables about location
+* Latitude from Listings Dataset
+* Longitude from Listings Dataset
+* Is_location_exact from Listings Dataset
+
+#### Variables about the property
+* Property_type from Listings Dataset
+* Room_type from Listings Dataset
+* Bathrooms from Listings Dataset
+* Beds from Listings Dataset
+* Bed_type from Listings Dataset
+* Price from Listings Dataset
+* Security_deposit from Listings Dataset
+* Cleaning_fee from Listings Dataset
+* Guests_included from Listings Dataset
+
+#### Dummy variables for most 5 freq amenities
+* is_One (whether the property has wireless internet) created from amenities of Listings Dataset
+* is_Two (whether the property has smoke detector) created from amenities of Listings Dataset
+* is_Three (whether the property has air conditioning) created from amenities of Listings Dataset
+* is_Four (whether the property has carbon monoxide) created from amenities of Listings Dataset
+* is_Five (whether the property has monoxide detector) created from amenities of Listings Dataset
+
+#### Variables about review information
+* Number_of_reviews from Listings Dataset
+* Review_scores_rating from Listings Dataset
+* Review_scores_cleanliness from Listings Dataset
+* Review_scores_location from Listings Dataset
+* Reviews_per_month from Listings Dataset
+
+#### Variables about other information
+* Instant_bookable from Listings Dataset
+* Is_business_travel_ready from Listings Dataset
+* Cancellation_policy from Listings Dataset
+* Require_guest_phone_verification from Listings Dataset
+* Calculated_host_listings_count from Listings Dataset
+
+#### Added variables from other datasets
+* Med_value_per_sqft from Bos_Property Dataset
+* Monthly_rentout_days from Calendar Dataset
+* Mean_pol from Reviews dataset
+
+## Part I: Data exploration and initial investigation
+
+### Load the data
+```{r, warning=FALSE}
+##load the listing data
+List_DF <- read.csv("listings.csv",stringsAsFactors = FALSE)
+Review_DF <-read.csv("reviews.csv", encoding = "latin -1", stringsAsFactors = FALSE)
+Bos_Property <-read.csv("boston_property.csv", stringsAsFactors = FALSE)
+Calendar_DF <-read.csv("calendar.csv")
+Zip_DF <- read.csv("boston_zipcodes.csv")
+```
+
+### Boston Property Analysis
+```{r}
+# filter missing data of Boston Preperty
+Bos_Property$ZIPCODE[Bos_Property$ZIPCODE==0] <- NA
+Bos_Property$AV_TOTAL[Bos_Property$AV_TOTAL==0] <- NA
+Bos_Property$LIVING_AREA[Bos_Property$LIVING_AREA==0] <- NA
+Bos_Property <- na.omit(Bos_Property)
+
+# check missing data
+sapply(Bos_Property, function(x) sum(is.na(x)))
+
+# group properties by zipcode
+# value per square feet
+Bos_Property$VALUE_PER_AREA <- Bos_Property$AV_TOTAL / Bos_Property$LIVING_AREA
+
+# calculate mean, median and stdev, group by ZIPCODE
+Val_DF <- summarise(group_by(Bos_Property, ZIPCODE), mean = mean(VALUE_PER_AREA), median = median(VALUE_PER_AREA), STDEV = sd(VALUE_PER_AREA))
+head(Val_DF)
+
+# use only median, save as a new dataframe
+Val_DF <- summarise(group_by(Bos_Property, ZIPCODE), med_value_per_sqft = median(VALUE_PER_AREA))
+names(Val_DF)[1]<-paste("zipcode")
+Val_DF$med_value_per_sqft <- round(Val_DF$med_value_per_sqft, 2)
+```
+
+The dataset “Boston Property” contains the description of every real estate property in Boston. The main features include Property ID, detailed address, zip code, property type, area and assessed value. Considering property value as a very important factor for pricing Airbnb, and because this dataset is the only one that contains such information, we used this dataset to calculate value of property per square foot (dividing the assessed total value by living area).  Then we calculated the median value per square foot in an area, grouping them by zip code, so that we can link this dataset with dataset “Listings” by zip code.
+
+The reason we chose median value instead of mean was that property values tend to have many outliers and using mean values would cause bias. The calculation of mean, median and standard deviation proved this point. 
+For this dataset, the data cleaning process including conversion of zeros and elimination of NA’s. We only used “AV_TOTAL”, “LIVING_AREA” and “ZIPCODE”, since none of them can be replaced according to other known information, we chose to delete all of the rows with zero or NA in these three columns.
+
+
+### Calendar Analysis
+```{r, warning=FALSE}
+
+# create new dataframe
+Cal_F <- Calendar_DF %>%
+  filter(available == "f")
+
+# calculate rent-out days per month, group by listing_id
+Rentout_DF <- count(Cal_F, id = listing_id)
+Rentout_DF$n <- Rentout_DF$n / 12
+names(Rentout_DF)[2]<-paste("monthly_rentout_days")
+Rentout_DF$monthly_rentout_days <- round(Rentout_DF$monthly_rentout_days, 1)
+
+```
+
+The dataset “Calendar” is the simplest dataset that only contains the availability and historical or predetermined future price of each property listed on Airbnb.com in the nearly one year period from 10/6/2017 to 9/22/2018. This dataset does not contain any missing value. Since price is already reflected in the dataset “Listings”, we only considered availability in this dataset. Our group calculated the average rent-out days (unavailable days) per month to assess the popularity of the property. We linked this information to “Listing” by lising_id, which is unique for each property registered on Airbnb.com, so we grouped them by listing_id in our calculation.
+
+
+### Listing Analysis
+```{r}
+#subset data
+List_DF_One <- List_DF[,-c(2:4, 6, 9, 16:22,24,28,30,31,38,41:43,45,47,48,60,76,87:89)]
+
+#check missing value
+sapply(List_DF_One, function(x) sum(is.na(x)))
+address <- gsub("[^[:alnum:]',]", " ", List_DF_One$amenities)
+
+#covert all the dollar price to numberic
+List_DF_One[,c(37:41,43)] <- sapply(List_DF_One[,c(37:41,43)], function(x) as.numeric(gsub("[\\$,]", "",x)))
+
+#impute missing value
+List_DF_One$weekly_price[is.na(List_DF_One$weekly_price)] <- List_DF_One$price[is.na(List_DF_One$weekly_price)]* 7
+List_DF_One$monthly_price[is.na(List_DF_One$monthly_price)] <- List_DF_One$price[is.na(List_DF_One$monthly_price)] * 30
+List_DF_One$security_deposit[is.na(List_DF_One$security_deposit)] <- 0
+List_DF_One$cleaning_fee[is.na(List_DF_One$cleaning_fee)] <- 0
+List_DF_One <- List_DF_One[,-c(69:88)]
+List_DF_One <- na.omit(List_DF_One)
+
+#convert response rate to numeric
+List_DF_One$host_response_rate <- as.numeric(sub("%", "", List_DF_One$host_response_rate))/100
+
+#convert response rate to numeric
+List_DF_One$host_response_rate <- as.numeric(sub("%", "", List_DF_One$host_response_rate))/100
+
+#convert zipcode into numeric
+List_DF_One$zipcode <- as.numeric(List_DF_One$zipcode)
+
+#merge List_DF_One with Val_DF
+List_DF_One <- merge(List_DF_One, Val_DF, by = "zipcode")
+
+#merge List_DF_One with Rentout_DF
+List_DF_One <- merge(List_DF_One, Rentout_DF, by = "id")
+
+#process date
+List_DF_One$host_since <- as.Date(List_DF_One$host_since)
+List_DF_One$first_review <- as.Date(List_DF_One$first_review)
+List_DF_One$last_review <- as.Date(List_DF_One$last_review)
+
+#create new variable host_since_year
+List_DF_One$host_since_year <- year(List_DF_One$host_since)
+
+#create new variables first_review_year and last_review_year
+List_DF_One$first_review_year <- year(List_DF_One$first_review)
+List_DF_One$last_review_year <- year(List_DF_One$last_review)
+
+#check the data
+table(List_DF_One$property_type)
+
+#Histogram for property type
+fillColor = "#1c9099"
+List_DF_One_Stat <- List_DF_One %>%
+  group_by(property_type) %>%
+  summarize(count = n()) %>%
+  arrange(desc(count))
+
+List_DF_One_Stat %>% ggplot(aes(x = reorder(property_type,count), y = count)) + 
+  geom_bar(stat = 'identity',colour = "white", fill = fillColor) +
+  labs(x = 'Property Type', y = 'Count Of Property Type', title = 'Property Type Overview') +
+  coord_flip() + 
+  theme_bw()
+
+#Histogram for room type
+fillColor = "#1c9099"
+List_DF_One_Stat <- List_DF_One %>%
+  group_by(room_type) %>%
+  summarize(count = n()) %>%
+  arrange(desc(count))
+
+List_DF_One_Stat %>% ggplot(aes(x = reorder(room_type,count), y = count)) + 
+  geom_bar(stat = 'identity',colour = "white", fill = fillColor) +
+  labs(x = 'Room Type', y = 'Count Of Room Type', title = 'Room Type Overview') +
+  coord_flip() + 
+  theme_bw()
+
+#Histogram for bed type
+fillColor = "#1c9099"
+List_DF_One_Stat <- List_DF_One %>%
+  group_by(bed_type) %>%
+  summarize(count = n()) %>%
+  arrange(desc(count))
+
+List_DF_One_Stat %>% ggplot(aes(x = reorder(bed_type,count), y = count)) + 
+  geom_bar(stat = 'identity',colour = "white", fill = fillColor) +
+  labs(x = 'Bed Type', y = 'Count Of Bed Type', title = 'Bed Type Overview') +
+  coord_flip() + 
+  theme_bw()
+
+#Histogram for cancellation policy
+fillColor = "#1c9099"
+Cancel_Status <- List_DF_One %>%
+  group_by(cancellation_policy) %>% 
+  summarize(count = n()) %>%
+  arrange(desc(count)) 
+
+Cancel_Status %>% ggplot(aes(x = reorder(cancellation_policy, count), y = count)) + 
+  geom_bar(stat = 'identity',colour="white", fill =fillColor) +
+  labs(x = 'Cancellation Policy', y = 'Count', title = 'Cancellation Policy Distribution') +
+  coord_flip() + 
+  theme_bw()
+
+#listing property map
+BostonLL <-c(-71.30, 42.20, -70.80, 42.40)
+map <- get_map(location = BostonLL, zoom = 11)
+
+mapListings <- ggmap(map) + geom_point(aes(x= longitude, y = latitude), data = List_DF_One, alpha = 0.7,size=0.5) +         scale_color_gradient(low="#9ebcda",high="#8856a7")+
+  labs(title="Airbnb Boston Listing Properties",y="Latitude",x="Longtitude",color="Listing Properties" )
+
+mapListings
+
+```
+
+The dataset “Listing” contains the most detailed features of the Airbnb properties. These features are expressed by both literal form like host’s description of neighborhood, rules, amenities, property type, and numerical form such as zipcode, price, guests included, number of reviews and review scores. Since this dataset contains prices and the most complete features of the Airbnb properties, we chose this dataset as the foundation of of our pricing models, and merged useful data from other datasets to this one.
+
+The process of imputing missing values was more complicated than we did for other datasets. Considering the feasibility of replacement and correlation among variables, we treated these variables differently. For weekly price and monthly price that only show discount price if there is a discount for a week or a month, we used daily price multiplied by 7 to replace NA’s in weekly price and by 30 for monthly price. We also replace blank cells with zero for security deposit and cleaning fee, because only Airbnb property that charges deposit or a cleaning fee will show numbers in these columns. For other columns whose correlation coefficient with price is either 0 or 0.1 (the number of missing values is few) and whose NA’s are hard to replace (like review scores), we deleted the rows to ensure the accuracy of our data.
+
+After merging the data from “Calendar” and “Boston Property” into this dataset, we performed some conversions of variables to turn them into numeric or factor form (some variables seem to be numbers but are actually in characters form), and created new and more easy-to-use variables according to the current variables (e.g. we took only the year of first review date and last review date). 
+
+We then plotted histogram for property type, room type, bed type and cancellation policy, and created a map that shows location of Airbnb listing properties. From the plots we found that most properties are apartments, with fewer houses and condominiums. These three types take up over 90% of all listings. As for room type, around 60% properties provide the entire house or apartment, and around 40% provide private room with shared living room and kitchen. We also found that almost all of the beds are real bed. Over 50% of the properties are strict in terms of cancellation, about 25% are moderate and 20% are flexible. The map shows that properties tend to center in the Cambridge and other downtown area.
+
+
+### Review analysis
+```{r, warning=FALSE}
+#delete chinese review
+#Review_DF = Review_DF[-26281,] 
+
+#create an overall polarity object
+#review_pol <- polarity(Review_DF$comments)
+
+#Organzie and clean data
+##Add a polarity column
+#Review_DF_with_pol <- Review_DF %>% mutate(polarity = review_pol$all$polarity)
+
+#Review_DF_with_pol_Group <- Review_DF_with_pol %>% group_by(listing_id) %>% summarize(mean_pol = mean(polarity, na.rm = TRUE))
+
+#names(Review_DF_with_pol_Group)[1] <- "id"
+
+#write.csv(Review_DF_with_pol_Group, file = "MyData.csv")
+
+#load sentiment score and join it to List_DF_One
+MyData_DF <- read.csv("MyData.csv")
+
+List_DF_One <- merge(List_DF_One, MyData_DF, by = "id")
+```
+
+The dataset “Review” contains the comments from past guests, with the listing ID of the property, ID of the order, date, and reviewer identifications. Grouping by listing ID,  we calculated the polarity of all the comments for one property, and saved the results as a csv file due to the excessive amount of data. Afterwards, we only need to read the csv file as a dataframe, and merge the polarity to the dataset “Listing” by “id” that stands for listing ID. The polarity score stands for the customer sentiment towards a property and is considered to have influence on the pricing.
+
+
+### Further processing amenities from listing 
+```{r}
+
+#load the etxt, but structure is char
+text = as.factor(List_DF_One$amenities)
+
+
+#text
+
+# Pipe a VectorSource Corpus
+all_corpus <- text %>% 
+  VectorSource() %>% 
+  VCorpus()
+
+#define term length to 2  
+
+tokenizer <- function(x) 
+  NGramTokenizer(x, Weka_control(min = 2, max = 2))
+
+# Simple TFIDF DTM with 2 words
+all_dtm <- DocumentTermMatrix(
+  all_corpus, 
+  control = list(
+    removePunctuation = TRUE, 
+    removeNumbers = TRUE,
+    stopwords = c(stopwords("en")),
+    tokenizer = tokenizer
+  )
+)
+
+#covert to matrix and examine the dimension
+all_dtm_m <- as.matrix(all_dtm)
+dim(all_dtm_m)
+
+term_frequency <- colSums(all_dtm_m)
+
+
+# Sort term_frequency in descending order
+term_frequency <- sort(term_frequency, decreasing = TRUE)
+
+# View the top 5 most common words
+term_frequency[1:5]
+
+# Plot a barchart of the 5 most common words
+barplot(term_frequency[1:5], col = "light blue", las = 2, ylab = "Freq")
+title(main = list("5 Most Freq Amenities", font = 4))
+
+all_dtm_DF <- as.data.frame(all_dtm_m)
+
+#create dummy variables for 5 most freq amenities
+#wireless internet  
+List_DF_One$is_One <- ifelse(all_dtm_DF$`wireless internet`==1, 1,0)
+#smoke detector
+List_DF_One$is_Two <- ifelse(all_dtm_DF$`smoke detector`==1, 1,0)
+# air conditioning
+List_DF_One$is_Three <- ifelse(all_dtm_DF$`air conditioning`==1, 1,0)
+#carbon monoxide
+List_DF_One$is_Four <- ifelse(all_dtm_DF$`carbon monoxide`==1, 1,0)
+# monoxide detector
+List_DF_One$is_Five <- ifelse(all_dtm_DF$`monoxide`==1, 1,0)
+```
+
+The amenities is an important factor in assessing the quality of the property, and we hope to figure out which factors have the strongest impact on the price. However, the content in the column is messy. Multiple tags are bundled together in one unit, and we had to tokenize the content with the limit of two-word length, since most tags have two words. Next, we also removed punctuation marks and meaningless numbers to make the data tidy. After that, we decided to take a look at the frequecy of each amenity, because we wonder whether these most common ammenities a property on Airbnb have significantly impact the pricing of properties. The result turned to be that "Wireless Internet", "Smoke Detector", "Air Conditioning", "Carbon Monoxide" and "Monoxide Detector" are the 5 most common ammenities among Airbnb properties. After filtering out and plotting 5 most common variables, we manually turn them into dummy variables, and add them as new columns in our listing dataset. Later we would run a linear regression on these dummies.
+
+
+### Predictors selection
+```{r, warning=FALSE}
+#visualize the correlation of price and all numeric variables
+ggcorr(List_DF_One[,c(37:45,15,18:19, 26:27, 31:34, 48:52, 55:61, 67:74)], label=TRUE, cex=3)
+
+#anova test all categorical variables
+#sig
+summary(aov(price~host_response_rate,data = List_DF_One))
+summary(aov(price~host_response_time,data = List_DF_One))
+t.test(price~host_is_superhost, data = List_DF_One)
+summary(aov(price~host_neighbourhood,data = List_DF_One))
+t.test(price~host_identity_verified, data = List_DF_One)
+t.test(price~is_location_exact, data = List_DF_One)
+summary(aov(price~property_type,data = List_DF_One))
+summary(aov(price~room_type,data = List_DF_One))
+summary(aov(price~bed_type,data = List_DF_One))
+summary(aov(price~cancellation_policy,data = List_DF_One))
+t.test(price~instant_bookable, data = List_DF_One)
+t.test(price~is_business_travel_ready, data = List_DF_One)
+t.test(price~require_guest_phone_verification, data = List_DF_One)
+summary(aov(price~calendar_updated,data = List_DF_One))
+t.test(price~as.factor(is_One), data = List_DF_One)
+t.test(price~as.factor(is_Two), data = List_DF_One)
+t.test(price~as.factor(is_Three), data = List_DF_One)
+t.test(price~as.factor(is_Four), data = List_DF_One)
+t.test(price~as.factor(is_Five), data = List_DF_One)
+
+#not sig
+t.test(price~host_has_profile_pic, data = List_DF_One)
+t.test(price~require_guest_profile_picture, data = List_DF_One)
+
+
+## Pricipal Component Analysis
+#take numerical variables
+List_DF_Num <- List_DF_One[,c(37:45,15,18:19, 26:27, 31:34, 48:52, 55:61, 67:74)]
+List_DF_Num[,c(6,8,9,11:32)] <- lapply(List_DF_Num[,c(6,8,9,11:32)],as.numeric)
+List_DF_Num <- na.omit(List_DF_Num)
+
+#PCA for numerical variables
+pcs <- prcomp(List_DF_Num[, c(10:38)], na.rm = TRUE)
+summary(pcs)
+pcs$rot
+
+
+## Random Forest
+#set seed
+set.seed(1234)
+
+#random forest
+airbnb_rf <- randomForest(price ~., data = List_DF_Num, importance = TRUE, na.action = na.roughfix)
+
+#print the model output
+print(airbnb_rf)
+
+#Error rate and tree size
+plot(airbnb_rf, main = "Out of Bag Error and Tree Size")
+
+#variable importance plot
+varImpPlot(airbnb_rf, type = 1, main = "Mean Decrease Accuracy Table")
+
+```
+
+To better select variables for the models, we took several different methods in predictors selection. For numerical variables, we visualized correlations, performed principal component analysis and drew a variable importance plot using a raw random forest model that included all numeric variables in the dataframe List_DF_Num. We combined the results of all three methods to determine which variables to use and which to drop. For example, both PCA and importance scores show that weekly price and monthly price has the most significant impact on price, but only correlation coefficients explained that this was due to us replacing blanking weekly and monthly price with numbers calculated from daily price. Therefore we dropped these two variables to avoid inaccurate predictions. We also dropped the variables that have zero correlation with price, including min nights, max nights, first review year, last review year, review scores accuracy and review scores checkin. In addition, we avoided multicollinearity by dropping some of the predictors that have high (over 0.75) correlation with each other. For example, accommodates, (number of) bedrooms, (number of) beds all reflect how many guests can be accomodated in a property, and therefore have high correlation with each other. So we dropped two of them. Similarly, availability in 30 days, 60 days, 90 days and 365 days have high correlations because they are all about for how many days a property can be rent out in a n-day period. Since the monthly rent-out days calculated from one-year data has a higher correlation with price, we chose to keep the monthly rent-out days and dropped all four original availability variables.
+
+For each of the categorical variables, we did an anova test or a t-test to find out significance of predictors. We dropped the insignificant variables and kept the significant ones such as property type and room type. The variable selected would be subsetted as a new dataframe and used for the models in the following model section.
+
+## Part II: Discussion of Model Strategy
+
+### Data splitting and model building
+```{r}
+
+#List_DF_Two <- cbind(List_DF_One, as.data.frame(all_dtm_m))
+set.seed(333)
+
+#subset dataframe based on feature selection results
+List_DF_Two <- List_DF_One[,-c(1:13,15,17:20,24:25,31,33,36,38:39,43:46,47:51,53:54,56,58:59,61,65,71:73)]
+
+#convert check all factors
+List_DF_Two[,c(1:5,8:10,13,23:25)] <- sapply(List_DF_Two[,c(1:5,8:10,13,23:25, 31:35)], function(x) as.factor(x))
+sapply(List_DF_Two[,c(1:5,8:10,13,18,23:26)], function(x) table(x))
+
+#delete all dimensionas with NA value
+List_DF_Two_NoNA <- na.omit(List_DF_Two)
+
+#Check is there is still NA value
+sapply(List_DF_Two_NoNA, function(x) sum(is.na(x)))
+
+#Split the data to training and validated
+n=nrow(List_DF_Two_NoNA)
+
+train_index <- sample(1:n, 0.7*n)
+train_set <- List_DF_Two_NoNA[train_index,]
+valid_set <- List_DF_Two_NoNA[-train_index,]
+```
+
+After merging all data into one single data frame “List_DF_Two_NoNA”, our group partitioned our data into a training set (70%) and a test set (30%). Price is chosen as the dependent variable for our models, since it is the target variable we want to analyze and draw a conclusion on. Before choosing models, our group firstly subsetted data frame by eliminating high-correlated variables and insignificant variables. Then we checked whether the remaining variables have missing values, and deleted all dimensions with NA value. 
+
+### Model 1: build a linear regression model
+```{r}
+#build the 1st model
+Airbnb_lm_raw <-lm(price ~.,train_set)
+summary(Airbnb_lm_raw)
+
+valid_set$preprice <- predict(Airbnb_lm_raw, valid_set)
+
+ggplot(valid_set, aes(x = preprice, y = price)) + 
+  geom_point() + 
+  geom_abline()
+
+#choose significant variables 
+anova(Airbnb_lm_raw)
+AIC(Airbnb_lm_raw)
+
+#new formular for train set
+formular <- price ~ host_response_time + neighbourhood + property_type + room_type + bathrooms + beds  +
+    guests_included + number_of_reviews + review_scores_rating + instant_bookable + require_guest_phone_verification +             calculated_host_listings_count + reviews_per_month + med_value_per_sqft + mean_pol     
+
+
+train_set2 <- train_set[,c('host_response_time','neighbourhood','property_type','room_type','bathrooms','beds',
+    'guests_included','number_of_reviews','review_scores_rating','instant_bookable','require_guest_phone_verification',             'calculated_host_listings_count','reviews_per_month','price','med_value_per_sqft','mean_pol')]
+
+valid_set2 <- valid_set[,c('host_response_time','neighbourhood','property_type','room_type','bathrooms','beds', 'guests_included','number_of_reviews','review_scores_rating','instant_bookable','require_guest_phone_verification',             'calculated_host_listings_count','reviews_per_month','price','med_value_per_sqft','mean_pol')]
+
+#Split the data to training and validated
+#build the 2nd model
+Airbnb_lm <- lm(price~., train_set2)
+
+summary(Airbnb_lm)
+anova(Airbnb_lm)
+AIC(Airbnb_lm)
+BIC(Airbnb_lm)
+
+valid_set2$preprice <- predict(Airbnb_lm, valid_set2)
+
+
+# Evaluate the r-squared on est data.and print them
+rmse_1 <- (mean((valid_set2$preprice - valid_set2$price)^2))^0.5
+rmse_1
+
+# Plot the predictions (on the x-axis) against the outcome (cty) on the test data
+ggplot(valid_set2, aes(x = preprice, y = price)) + 
+  geom_point() + 
+  geom_abline()
+
+# Calculate residuals
+valid_set2$residuals <- valid_set2$price-valid_set2$preprice
+
+# Fill in the blanks to plot predictions (on x-axis) versus the residuals
+ggplot(valid_set2, aes(x = preprice, y = residuals)) + 
+  geom_pointrange(aes(ymin = 0, ymax = residuals)) + 
+  geom_hline(yintercept = 0, linetype = 3) + 
+  ggtitle("residuals vs. linear model prediction")
+
+
+# Plot the Gain Curve
+GainCurvePlot(valid_set2, "preprice", "price", "Airbnb Pricing model")
+
+
+```
+
+The dependent variable (price) is a numeric variable, and we tried to predict it using relevant variables. In this case, a basic linear regression model would be a good choice and it became our first model. We first did a raw linear regression with price regressed on all independent variables from the training set. Then we got the prediction on price based on our raw model. Our second step was to conduct an anova analysis to extract significant variables. A new linear regression model was then generated by containing only significant variables. Then we evaluated the model by calculating its RMSE, which is 86.08. A prediction graph, a residual graph and a gain curve were then created in order to show us a more direct picture of our predicting accuracy. It can be seen that, after eliminating the insignificant data, our first model, the basic linear regression model, has relatively strong predicting power towards the price. 
+
+### Model 2: build regression tree model
+```{r}
+price_tree <- rpart(price~., method = "anova", data = train_set)
+summary(price_tree)
+
+# Establish a list of possible values for minsplit and maxdepth
+minsplit <- seq(1, 30, 5)
+maxdepth <- seq(5, 40, 10)
+
+# Create a data frame containing all combinations
+hyper_grid <- expand.grid(minsplit = minsplit,maxdepth = maxdepth)
+hyper_grid[1:10,]
+
+price_models <- list()
+# execute the grid search
+
+for (i in 1:nrow(hyper_grid)) {
+
+# get minsplit, maxdepth values at row i
+minsplit <- hyper_grid$minsplit[i]
+maxdepth <- hyper_grid$maxdepth[i]
+
+# train a model and store in the list
+price_models[[i]] <- rpart(formula = price ~ .,
+data = train_set,
+minsplit = minsplit)
+}
+
+# create an empty vector to store RMSE values
+rmse_values <- c()
+# compute validation RMSE Values
+
+for (i in 1:length(price_models)) {
+
+# retreive the i^th model from the list
+price_model <- price_models[[i]]
+
+# generate predictions on grade_valid
+pred <- predict(object = price_model,newdata = valid_set)
+
+# compute validation RMSE and add to the list
+rmse_values[i] <- rmse(actual = valid_set$price,predicted = pred)
+}
+
+# Identify the model with smallest validation set RMSE
+best_model <- price_models[[which.min(rmse_values)]]
+
+# Print the model paramters of the best model
+summary(best_model) 
+best_model$control
+
+# Compute test set RMSE on best_model
+pred <- predict(object = best_model, newdata = valid_set)
+rmse_2 <- rmse(actual = valid_set$price, predicted = pred)
+rmse_2
+
+```
+
+Linear regression model is a global model that has a single prediction formula holds for the whole database. However, sometimes a nonlinear regression model may be more than helpful if the dataset has lots of complicated features. Therefore, an alternative way we can choose is to conduct a nonlinear regression that can partition our dataset into small pieces, and manage the relationships of different input variables. We then partition those small prices (subdivision) again. This nonlinear method is called recursive partition, because we partition and train the data again and again until we get several tame chunks that can fit with a simple model. A regression tree model is used to represent the recursive partition. Considering the complicated nature of our dataset and the potential interaction among our independent variables, our group chose regression tree as our second model to see if it can improve our predicting power. 
+
+For our second model, first we used rpart function with “anova” as the method to generate a raw regression tree model. After getting a summary of the tree model, we were able to see the importance of the variables, number of nodes and the decision rules of each node. In order to get a “best” tree model, we then began to further process our data. We established a list of possible values for minsplit and maxdepth and created a dataframe that contains all combinations. Then we created a for loop to train models with different minsplits and output the one with the least RMSE. As we can see from the output derived from our code, the RMSE of our best model is 86.23.
+
+
+### Model 3: build a stepwise regression model
+```{r}
+
+# Fit the full model 
+full.model <- lm(price ~., data = train_set)
+# Stepwise regression model
+step.model <- stepAIC(full.model, direction = "both", 
+                      trace = FALSE)
+summary(step.model)
+AIC(step.model)
+BIC(step.model)
+
+pred_m3 <- predict(object = step.model, newdata = valid_set)
+
+rmse_3 <- (mean((pred_m3 - valid_set$price)^2))^0.5
+rmse_3
+
+```
+
+It can be said that variable selection is the most crucial part in building our model, and we want to make sure that our model only includes the most relevant variables. In our first basic linear regression model, we manually eliminated the insignificant variables based on the output of the correlation table (for categorical variables) and ANOVA analysis (for numeric variables). However, manual elimination and selection are subject to error, so we want to use a more logic method to conduct our analysis. This led us to our third model -- the stepwise regression model.  
+
+Stepwise regression is like the combination of forward regression and backward selection. It starts with no predictors and then add predictors one by one (like forward regression). At each step, the model also considers dropping predictors that are not statistically significant (like backward regression). This is an automated procedure to select the best-fitted model with relatively high accuracy. In our code section, first we built a model with all variables included in training set and then used stepwise method to select significant variables. From our prediction results based on the validation set, the RMSE of our third model can be calculated as 86.45.
+
+## Part III: Comparison of Models
+
+Our group used R-squared, RMSE, AIC and BIC as the evaluation metrics to help us to choose the best model. As we can see from the table above, the differences among our three models are not very large, but we can still tell which one is the best. Among three models, the stepwise regression model has the largest R-square, the least AIC and the least BIC. It shows that the variables of stepwise regression are most representative and most influencial. Although the stepwise regression method has a relatively larger RMSE compared to other two models, the difference is not that significant -- the difference of RMSE between the stepwise model and the model with the least RMSE is only 0.38%. Also the R-square seems to be not as high as we expected, but we believes it was due to the missing of important inputs, such as the size of the listed properties. These inputs would almost definitely highly correlated with price, and missing it lowered the both the R-suqre and some accuracy. With the exception of RMSE, all other accuracy measures indicate stepwise regression is the best, and the difference of RMSE is not very significant. Therefore, our group regards the stepwise regression model as the best model.
+
+
+Model(s)                 |  R-Square  |   RMSE     |    AIC   |    BIC   | 
+-------------------------|------------|------------|----------|----------| 
+Basic Linear Regression  |   0.3855   |   86.0785  | 33410.91 | 33770.19 |
+Regression Tree          |      -     |   86.2258  |     -    |    -     |
+Stepwise Regression      |   0.3878   |   86.4523  | 33400.87 | 33760.15 |
+
+
+
+
+## Part IV: Conclusion
+
+Our group chooses the stepwise model as the optimal model. This result appears to be logical since this model is the optimal linear regression model automatically generated by R. From the summary of the stepwise regression model, it can be found that customers are highly concerned about whether the properties are private or shared with other people, how many bathrooms are in the house (the impact of number of bathrooms is even more significant than the number of bedrooms'), how has the house been evaluated by past customers (customers pay attention to the negative reviews left by past customers), and whether the Airbnb property has air conditioning (air conditioning seems to be one of the primary issues customers consider). Besides, from the stepwise model, our group also finds that the price of Airbnb property is highly correlated with its location, because the median values per square feet of different areas in Boston vary largely.
+
+
+Significant Variables              |  Estimated Coefficients  |
+-----------------------------------|--------------------------|
+Neighborhood Downtown              |          298.31          | 
+Neighbourhood BackBay              |          51.38           |       
+Neighbourhood Fenway/Kenmore       |          60.47           |
+Neighbourhood SouthBoston          |          47.95           |
+Property_type Boat                 |          516.24          |
+Property_type Hostel               |         -294.87          |
+Room_type Private room             |         -64.26           |
+Room_type Shared room              |         -81.52           |
+Bathrooms                          |          75.74           |
+Beds                               |          17.58           |
+Guests_included                    |          12.71           |
+cancellation_policysuper_strict_60 |          230.23          |
+Reviews_per_month                  |          -6.80           |    
+Mean_pol                           |          32.83           |
+
+#### Neighborhood
+
+The estimated coefficients of Neighborhood Downtown shows that on average, properties located at downtown Boston tend to be 298.31 more expensive than those nerghborhood outside downtown, holding other variables constant. Similarly, holding other variables constant, the model gives a 51.38 premium to properties located in Back Bay, 60.47 to properties in Fenway/Kenmore, and $47.95 to properties in South Boston. The estimated coefficients indicate that location is a very important factor in pricing Airbnb properties. For example, due to the close distance to the tourist attractions and shopping malls, properties in Downtown Boston, the center business district, provide convenience to guests, and are reasonable to charge higher prices. 
+
+#### Property’s traits
+
+The estimated coefficients of Property_type Boat shows that on average, the properties whose type is boat (people will live in a boat) in Boston tend to be $516.24 higher than other Airbnb property type, holding other variables constant. This result seems to be logic since boat houses of Airbnb are relatively rare and fancy in Boston, and customers are willing to pay high for this type of house. 
+
+The estimated coefficients of Property_type Hostel shows that on average, the properties whose type is hostel in Boston tend to be $294.87 lower than other Airbnb property type, holding other variables constant. This indicates that people tends to unwilling to share the house/room with other people. 
+
+Airbnb has three room types, which are entire home/apt, private room and shared room. Entire home/apt indicates that the Airbnb customers will own the whole house/apt during their living period; private room indicates that Airbnb customers will own their own room during their living period but have to share the the rest of house with other Airbnb customers; shared room indicates that the Airbnb customers have to share both their room and the rest of the house with other people. As we can see from the table, the Room_type Private room variable and the Room_type Private room variable have significantly negative relationship with price, which on the other hand confirms our guess above that people are unwilling to share their living space with other people. 
+
+Surprisingly, our group finds that people pay more attention to the number of bathroom than the number of bedrooms. For example, if house A has one more bathroom than house B, holding other variables constant, the renting price of house A will be 75.74 higher than that of house B; if house A has one more bedroom than house B, holding other variables constant, house A will only be 17.58 more expensive than house B. This indicates that people are willing to pay more for one extra bathroom compared to one extra bedroom. The positive estimated coefficient of Guest_included indicates that the house price is positive correlated with the number of people that the house can accommodate. 
+
+#### Cancellation Policy
+
+Holding other variables constant, properties with strict cancellation policy that requires guests to cancel at least 60 days before check-in are on average $230.23 more expensive than those with a flexible policy. According to the magnitude of coefficient, apart from location (neighbourhood) and property type, the 60-day cancellation policy has the biggest influence on the price. Actually, properties with strict cancellation policies are generally more luxury houses/apartments, because they would bear much more loss than other properties if the orders were cancelled flexibly. Therefore, the model gives these properties a high premium.
+
+#### Reviews
+In our case, one more review every month will lower the price by $6.8, holding other variables constant. We believe this is primarily due to the increase of number of negative reviews accompanied by the increasae in the total number of reviews. Sometimes people tend to pay more attention to the negative reviews than positive ones. Besides, properties with high price may naturally have fewer guests, thus lower the number of reviews.
+
+#### Mean Polarity
+Compared to number of reviews received per month, sentiment of the reviews have larger impact on the price. While other variables are constant, if polarity score of a property increases by one, the price will increase by $32.83. A property is usually highly appraised because it has larger space, a more convenient location, or a more luxury experience. Such properties need to charge more for the services superior to other properties.
+
+### Recommendation
+Our analysis above addresses the questions we proposed in the first section and generates some useful insights for Airbnb. Location does matter to Airbnb properties’ pricing. From our analysis, the price of house located in downtown are significantly higher than that of the house located out of town because of the excellent location of downtown Boston. But sometimes the high price may become a burden for customers who are looking for a cheap place to live. Therefore, our recommendation is that the Airbnb properties located in downtown Boston, especially those on the boundary of downtown and suburbs can lower their price a little to attract the customer originally would have chosen properties at suburbs.  
+
+The property type also matters to the pricing of Airbnb property. Our analysis indicates that people are somehow unwilling to share their living space with other people. Therefore, our second recommendation is that if Airbnb properties want to maintain a relatively high and reasonable price, they should try their best to give their customers an exclusive living space without sharing the house/apt with other customers. The property’s price needs to be adjusted lower if the customers needed to share their living space with other strangers. 
+
+Our model also reveals that customers care more about bathrooms than bedrooms, and they are willing to pay more for one extra bathroom. Therefore, our third suggestion is that the hosts can increase the number of bathrooms available if they would like to price their properties higher and attract more customers.
+
+The most frequent words mentioned in Airbnb amenities are wireless internet, smoke detector, air conditioning and monoxide detector. Those four items can be seen as necessities in Airbnb properties. Therefore, our fourth recommendation is that if the hosts want to compete on this competitive Airbnb market, first their house should at least own those four items and then consider to add more attracted house features. 
+
+Our last and perhaps the most important suggestion is that Airbnb should investigate more about the living areas of their listing properties. As explained in the comparison part, the missing data of the living areas contributes to the relatively low R-square (lower than 40%) of our three models. Our group looked into the Listing dataset of Airbnb but found that we could not find any information about the detailed living area for the properties. Adding the living area information can be really helpful for further analysis towards Airbnb’s pricing strategy. 
+
+## Reference
+ [1]https://www.rforexcelusers.com/remove-currency-dollar-sign-r/
+ [2]http://www.rpubs.com/Mturgal/164857
+ [3]https://crmda.dept.ku.edu/guides/38.R_datetime/38.R_datetime.html
+ [4]http://www.di.fc.ul.pt/~jpn/r/tree/tree.html
+ [5]https://docs.databricks.com/spark/latest/sparkr/overview.html#machine-learning
+ [6]https://www.analyticsvidhya.com/blog/2015/07/dimension-reduction-methods/
+ [7]http://www.sthda.com/english/articles/37-model-selection-essentials-in-r/154-stepwise-regression-essentials-in-r/
