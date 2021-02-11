@@ -1,0 +1,182 @@
+---
+title: "Netflix Assignment"
+author: "Shine"
+date: "3/18/2018"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load the packages
+```{r, warning=FALSE}
+library(data.table)
+library(GGally)
+library(jtools)
+```
+
+##Part1. Preparing the data
+```{r}
+#load the csv file
+rockyDF <- read.csv("rockyDB.csv")
+
+#rename the columns
+setnames(rockyDF, old = c('X1','X2','X3', 'X4','X5'), new = c('Rocky1','Rocky2','Rocky3', 'Rocky4', 'Rocky5'))
+
+#convert all 0 to NA
+rockyDF[rockyDF==0] <- NA
+
+#checking total missing data
+sapply(rockyDF,function(x) sum(is.na(x)))
+```
+###Discussing:
+*(b)The reason that using '0' to represent missing value will cause problem is because '0' means the rating of each missing entry is 0, so when mean was calculated,the overall mean will be lower as the size of each variables increase by filled with 0. For each Rocky movie, implily repalce those empty entries with '0" may lead to an underestimation of the predicted value.
+
+
+##Part 2: Data exploration and processing
+```{r}
+#generate the correlation matrix, and handle the missing data 
+cor(rockyDF[,-1], method = c("pearson"),use = "pairwise")
+
+#alternative command
+cor(rockyDF[,-1], method = c("pearson"),use = "complete.obs")
+
+#visualize the correlation between movies
+ggcorr(rockyDF[,-1], label=TRUE, cex=3)
+
+#find mean rating of each movie
+meanR <- apply(rockyDF[,-1], 2, mean,na.rm = TRUE)
+round(meanR,2)
+
+#subset data frame condition:rated R4
+rockyDF_subset4 <- rockyDF[!is.na(rockyDF$Rocky4),]
+
+#find the mean of subset dataframe
+mean_subset4 <- apply(rockyDF_subset4[,-1], 2, mean,na.rm = TRUE)
+round(mean_subset4,2)
+
+#create rockyDB_noNA
+rockyDB_noNA <- na.omit(rockyDF)
+#find the mean of noNA subset
+mean_noNA <- apply(rockyDB_noNA[,-1], 2, mean,na.rm = TRUE)
+round(mean_noNA,2)
+
+#subset data frame condition:rated R5
+rockyDF_subset5 <- rockyDF[!is.na(rockyDF$Rocky5),]
+
+#create dummy varibles to checking missing value of R1-R4
+rockyDF_subset5$isMissing1 <- ifelse(is.na(rockyDF_subset5$Rocky1), 1, 0)
+rockyDF_subset5$isMissing2 <- ifelse(is.na(rockyDF_subset5$Rocky2), 1, 0)
+rockyDF_subset5$isMissing3 <- ifelse(is.na(rockyDF_subset5$Rocky3), 1, 0)
+rockyDF_subset5$isMissing4 <- ifelse(is.na(rockyDF_subset5$Rocky4), 1, 0)
+
+#ttest to verify the null hypothesis
+t.test(rockyDF_subset5$Rocky5~factor(rockyDF_subset5$isMissing1))
+t.test(rockyDF_subset5$Rocky5~factor(rockyDF_subset5$isMissing2))
+t.test(rockyDF_subset5$Rocky5~factor(rockyDF_subset5$isMissing3))
+t.test(rockyDF_subset5$Rocky5~factor(rockyDF_subset5$isMissing4))
+
+#create the final dataframe rockyDB_impute
+#delete all the records where Rocky1 rating is NA
+rockyDB_impute <- rockyDF[!is.na(rockyDF$Rocky1),]
+
+#create dummy variables for checking NA in R2-R4
+rockyDB_impute$isMissing2 <- ifelse(is.na(rockyDB_impute$Rocky2), 1, 0)
+rockyDB_impute$isMissing3 <- ifelse(is.na(rockyDB_impute$Rocky3), 1, 0)
+rockyDB_impute$isMissing4 <- ifelse(is.na(rockyDB_impute$Rocky4), 1, 0)
+
+#impute R2-R4 with median of the column 
+rockyDB_impute$Rocky2[is.na(rockyDB_impute$Rocky2)] = median(rockyDB_impute$Rocky2, na.rm = TRUE)
+rockyDB_impute$Rocky3[is.na(rockyDB_impute$Rocky3)] = median(rockyDB_impute$Rocky3, na.rm = TRUE)
+rockyDB_impute$Rocky4[is.na(rockyDB_impute$Rocky4)] = median(rockyDB_impute$Rocky4, na.rm = TRUE)
+
+```
+###Discussing: 
+*(a)From the output correlation matrix as well as correlation table, we could see Rocky2(R2) and Rocky3(R3),and R3 and Rocky4(R4)are most similar. R1 and Rocky5(R5) are most different from the others.
+
+*(b)R1 has the best mean rating, while R5 has the worst mean rating.
+
+*(c)Compared with previous mean rating,the mean rating of subset dataframe increased, except for R4. The reason the rating changed may be becasue for the original dataset, there are total 89178 observations, while for those who rated R4, the subset dataset just have 27362 observations. For those rated R4 and also gave high ratings, there was a possibility they also wathched R1, R2,R3 or R5, and gave high grades. So this maybe a possible reason the overall subset means are higher than those of original dataset.
+
+*(d)The reason some movies missing is becasue people didn't watch those movies, so they had no options on the rating. Omitted data will introduce the problem if we use those data directly building our predication model, becasue those missing data makes connecting all the signals within and between features impossible. Missing data also makes it difficult for the algorithm to learning during the training. Although we could ignore or impute missing values, but too many of them pose the uncertanity to predictions as missing value could conceal any possible figure; consequently the more the missing values, the more variable and imprecise the predications.[1]
+
+Mean rating for noNA dataset increased a lot compared to original Rocky_DB dataset, this bias comes from the na.omit() function removes all of the rows that have missing values in any variable,so all observaions in the rocky_noNA now have the completed rating on each Rocky movie, which means for those who gave rating on each movie, they must watched and love the who series, so the average rating on each movie tends to be higher than the means of original RockDF dataset.
+
+*(e)The prediction may be still biased is becasue the missing data is filled by the prediction derived from existing data, but for the Rocky dataset, there a very large number of missing data, so the statistical models we build to impute the missing values are based on small number of existing records. And those models might be also useless and produced bias for our analysis.
+
+*(f)From t-test, it can be seen that except R1, the missing data of R2,R3 and R4 all statistically significant on the rating of R5, so the strategy is delete all the row is R1 is missing, and use column median to replace all the missing value for R2,R3 and R4.
+
+
+##Part 3: Predictive modelling
+```{r, warning= FALSE}
+#model on rokyDB_noNA
+model1 <- lm(Rocky5 ~ Rocky1 + Rocky2 + Rocky3 + Rocky4, data = rockyDB_noNA)
+summary(model1)
+
+#model on rokyDB_impute
+model2 <- lm(Rocky5 ~ Rocky1 + Rocky2 + Rocky3 + Rocky4, data = rockyDB_impute)
+summary(model2)
+
+#model on rokyDB_impute by adding dummy variables 
+model2 <- lm(Rocky5 ~ Rocky1 + Rocky2 + Rocky3 + Rocky4 + factor(isMissing2) +factor(isMissing3) +factor(isMissing4), data = rockyDB_impute)
+summary(model2)
+
+#expand to more models based on rockyDB_impute dataset 
+rocky1Vec = c('','+Rocky1','+Rocky1*Rocky2')
+rocky2Vec = c('','+Rocky2','+Rocky2*Rocky3')
+rocky3Vec = c('','+Rocky3','+Rocky3*Rocky4')
+rocky4Vec = c('','+Rocky4','+Rocky4*Rocky1')
+formulaSet = paste('Rocky5~1',
+apply(expand.grid(rocky1Vec,rocky2Vec,rocky3Vec,rocky4Vec),1,paste,collapse=''))
+
+#print the first 20 formulars
+(formular20 <- formulaSet[1:20])
+
+#split the dataset to traning and validation sets
+set.seed(1234)
+
+n=nrow(rockyDB_impute)
+
+train_index <- sample(1:n, 0.8*n)
+rockyDF_train <- rockyDB_impute[train_index,]
+rockyDF_valid <- rockyDB_impute[-train_index,]
+
+models <- list()
+valid_MSE <- c()
+
+#compute the MSE on those models
+for (i in 1:length(formular20)) {
+ models[[i]] <- lm(as.formula(formular20[i]), data = rockyDF_train)
+}
+
+for (i in 1:length(models)) {
+ model<-models[[i]]
+ valid_MSE[i] <- mean((rockyDF_valid$Rocky5 - predict(model,rockyDF_valid))^2, na.rm = TRUE)
+}
+
+#output_MSE
+#print the first 20 models along with MSE of out samples
+(models20_MSE <- data.frame(formular20,valid_MSE))
+
+#best model
+(best_index <- which.min(valid_MSE))
+
+valid_MSE[best_index]
+models[[best_index]]
+
+#examine the significance of each predictors
+summary(models[[best_index]])
+
+#Plot the interaction of R3 and R4
+interact_plot(models[[best_index]], pred = "Rocky3", modx = "Rocky4", plot.points = TRUE)
+
+
+```
+###Discussing: 
+
+*(c) After adding 'isMissing2', 'isMissing3' and 'isMissing4', those variables improve R-Squared,which increased from 0.3879 to 0.3919, as well as adjusted R-squared from 0.3876 to 0.3919.
+*(e) The best model among the first 20 models is Rocky5~0.44 + 0.15Rocky1 + 0.15Rocky4 + 0.08Rocky3:Rocky4, with out-of-sample MSE 0.93.This model means the default rating for R5 is 0.44 when other variables all equal to 0;while controling all other variables equal, for every additional score 1 in R1, we could expect the rating of R5 increase by average of 0.15; holding all other variables equal, for every additional score in R4, we could expect the rating of R5 increase by average of 0.15; while controling all other variables equal, the effect of R3 on the rating of R5 increase by 0.08 for every unit increases in R4.
+
+##reference
+[1]John Wiley & Sons(2016). Machine Learning For Dummies
