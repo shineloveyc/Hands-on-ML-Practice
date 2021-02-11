@@ -1,6 +1,6 @@
 ---
-title: "TeamD_Case3"
-author: "Shine Yao, Tianyu Zhang, Lingyi Kong, Jason Meng"
+title: "World Happiness Segmentation"
+author: "Shine Yao"
 date: "3/20/2018"
 output: word_document
 ---
