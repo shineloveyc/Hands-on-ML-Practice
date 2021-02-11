@@ -1,0 +1,451 @@
+---
+title: "Group_Project_1"
+author: 'Shine Yao, Jason Meng, Lingyi Kong'
+date: "1/30/2018"
+output:
+  word_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+Load the packages
+```{r, warning=FALSE, message=FALSE}
+library(tidyverse)   # loads a number of helpful Hadley Wickham packages
+library(ggplot2)     # way better than Base plotting
+library(tidyr)       # newer replacement for package Reshape
+library(rpart)
+library(rpart.plot)
+library(caret)
+library(openxlsx)
+library(lubridate)
+library(Metrics)
+```
+
+Part 1. Model Construction
+
+1-1. Read the data of Taxi_case csv file and tide up the data format
+
+```{r, message=FALSE, echo=TRUE}
+
+Taxi.df<- read.csv("Taxi_case.csv")
+
+#get time as numeric format
+Taxi.df$from_time <- Taxi.df$from_date%%1
+Taxi.df$booking_time<- Taxi.df$booking_created%%1
+
+#Binning peak and non-peak hours
+#Under the assumption that 8:00 am - 12:00 pm and 4:00 pm - 8:00 pm are the peak hours. One evidence of showing this as a fact is that the Bangalore government bans certain types of trucks from entering the Bangalore city. 
+Taxi.df$from_hours = "0"
+Taxi.df[Taxi.df$from_time <= 1/3 | Taxi.df$from_time > 11/24 & Taxi.df$from_time <= 2/3 | Taxi.df$from_time > 5/6 ,]$from_hours = "Peak"
+Taxi.df[Taxi.df$from_time > 1/3 & Taxi.df$from_time <= 11/24 | Taxi.df$from_time > 2/3 & Taxi.df$from_time <= 5/6 ,]$from_hours = "Normal"
+
+Taxi.df$booking_hours = "0"
+Taxi.df[Taxi.df$booking_time <= 1/3 | Taxi.df$booking_time > 11/24 & Taxi.df$booking_time <= 2/3 | Taxi.df$booking_time > 5/6 ,]$booking_hours = "Peak"
+Taxi.df[Taxi.df$booking_time > 1/3 & Taxi.df$booking_time <= 11/24 | Taxi.df$booking_time > 2/3 & Taxi.df$booking_time <= 5/6 ,]$booking_hours = "Normal"
+
+#Convert the date and time format
+Taxi.df$from_date <- convertToDateTime(Taxi.df$from_date, tx = "Asia/Colombo")
+Taxi.df$booking_created<- convertToDateTime(Taxi.df$booking_created, tx = "Asia/Colombo")  
+
+#Extract Month and Weekday from trip starting
+Taxi.df$from_month <- month(Taxi.df$from_date)
+Taxi.df$from_weekday <- wday(Taxi.df$from_date)
+#Taxi.df$from_time <- strftime(Taxi.df$from_date, format="%H/%M/%S")
+
+#Extract Month and Weekday from booking
+Taxi.df$booking_month <- month(Taxi.df$booking_created)
+Taxi.df$booking_weekday <- wday(Taxi.df$booking_created)
+#Taxi.df$booking_time <- strftime(Taxi.df$booking_created, format="%H:%M:%S")
+
+#calculate the lead hours between booking time and trip start time
+Taxi.df$lead_day <- time_length(interval(Taxi.df$booking_created,Taxi.df$from_date),"day")
+
+#Binning the months into quarters
+Taxi.df$from_quarter = "0"
+Taxi.df[Taxi.df$from_month <= 3,]$from_quarter = "Q1"
+Taxi.df[Taxi.df$from_month > 3 & Taxi.df$from_month <= 6,]$from_quarter = "Q2"
+Taxi.df[Taxi.df$from_month > 6 & Taxi.df$from_month <= 9,]$from_quarter = "Q3"
+Taxi.df[Taxi.df$from_month > 9,]$from_quarter = "Q4"
+
+Taxi.df$booking_quarter = "0"
+Taxi.df[Taxi.df$booking_month <= 3,]$booking_quarter = "Q1"
+Taxi.df[Taxi.df$booking_month > 3 & Taxi.df$booking_month <= 6,]$booking_quarter = "Q2"
+Taxi.df[Taxi.df$booking_month > 6 & Taxi.df$booking_month <= 9,]$booking_quarter = "Q3"
+Taxi.df[Taxi.df$booking_month > 9,]$booking_quarter = "Q4"
+
+#Binning the weekday to Weekday and Weekend
+Taxi.df$from_week = "0"
+Taxi.df[Taxi.df$from_weekday <= 5,]$from_week = "Weekday"
+Taxi.df[Taxi.df$from_weekday > 5 ,]$from_week = "Weekend"
+
+Taxi.df$booking_week = "0"
+Taxi.df[Taxi.df$booking_weekday <= 5,]$booking_week = "Weekday"
+Taxi.df[Taxi.df$booking_weekday > 5 ,]$booking_week = "Weekend"
+
+#Reduce dimensions
+Taxi.df = Taxi.df[,-c(1:2,6:11,14:18,20:21,24:27)]
+
+#Check the new data frame
+
+head(Taxi.df)
+
+```
+
+
+After analyzing original data set, our group decided to delete irrelevant categorical data such as "row#" and "user_id" to reduce data redundancy. We decided not to use latitude and longitude data of the area and also excluded area_id and city_id. The main original variables that we focus on are "vehicle_model_id", "package_id","travel_type_id", "online_booking", "mobile_site_booking" and "Car_Cancellation". The numerical date and time data are the most important variables for our analyze and they need deeper processing. 
+
+Our group categorised "from_date" and "book_created" into 'normal and peak hours' to simplify our analysis. In order to achieve this, we converted those two original column into numercial format, screened only hours and minutes from those two columns and created two new columns, named "from_time" and "booking_time", to store the new screened data. We also categorised "from_date" and "book_created" into 'quarters' and 'weekdays vs. weekends' to facilitate our analysis. In order to achieve this, we converted the date and time format, extracted the months and weekdays from those two columns and binned them into quarters and months. 
+
+We noticed that data missing happens a lot in "package_id" column. So, our group regarded those missing data as another type of package and include them in our analyze. For other occasional missing data we encountered in our analysis process, we use "na.rm=TRUE" function to ignore them.
+
+Our group also calculated the leading hour between booking time and trip start time because common sense tells us that the cancellation rate tends to rise if the leading hour is long. Longer wait time indicates higher uncertainty. After processing all necessary data, our group made a final data dimension deduction and made sure that only relevant data were left. 
+
+
+
+1-2.Convert data type
+
+```{r}
+# Covert all categorical variables to factors
+Taxi.df$vehicle_model_id <- as.factor(Taxi.df$vehicle_model_id)
+
+Taxi.df$package_id <- as.factor(Taxi.df$package_id)
+
+Taxi.df$travel_type_id <- as.factor(Taxi.df$travel_type_id)
+
+Taxi.df$online_booking <- as.factor(Taxi.df$online_booking)
+
+Taxi.df$mobile_site_booking <- as.factor(Taxi.df$mobile_site_booking)
+
+Taxi.df$from_hours <- as.factor(Taxi.df$from_hours)
+
+Taxi.df$booking_hours <- as.factor(Taxi.df$booking_hours)
+
+Taxi.df$from_week <- as.factor(Taxi.df$from_week )
+
+Taxi.df$booking_week <- as.factor(Taxi.df$from_week)
+
+#Round the lead time by day unit
+Taxi.df$lead_day <- round(as.numeric(Taxi.df$lead_day),1)
+
+```
+
+
+Input variables explanation at data fields:
+
+*vehicle_model_id - vehicle model type
+
+*package_id - type of package (1=4hrs & 40kms, 2=8hrs & 80kms, 3=6hrs & 60kms, 4= 10hrs & 100kms, 5=5hrs & 50kms, 6=3hrs & 30kms,7=12hrs & 120kms)
+
+*travel_type_id - type of travel (1=long distance, 2= point to point, 3= hourly rental)
+
+*online_booking - if booking was done on desktop website
+
+*mobile_site_booking - if booking was done on mobile website
+
+*from_hours - divide trip starting hour as "peak" or "normal" time
+
+*booking_hours - divide booking hour as "peak" or "normal" time
+
+*lead_day - the lead time between booking time and trip starting time, unit is day
+
+*from_quarter - divide trip starting months into 4 quarters as "Q1", "Q2","Q3" and "Q4"
+
+*booking_quarter - divide booking months into 4 quarters as "Q1", "Q2","Q3" and "Q4"
+
+*from_week - divide trip starting week into "weekday" and "weekend"
+
+*booking_week - divide booking week into "weekday" and "weekend"
+
+
+
+1-3.Build train data/validation data and the model
+
+```{r}
+# Set random seed. Don't remove this line.
+set.seed(1234)
+
+# Shuffle the dataset; build train and test at 7:3
+n <- nrow(Taxi.df)
+shuffled <- Taxi.df[sample(n),]
+Taxi_train <- shuffled[1:round(0.7 * n),]
+
+Taxi_test <- shuffled[(round(0.7 * n) + 1):n,]
+
+#build default model
+fml <- Car_Cancellation ~.
+
+Cancellation_tree <- rpart(fml,data = Taxi_train, method = "class")
+
+Cancellation_tree$cptable
+
+#find the optional complexity parameter
+
+opt_index <- which.min(Cancellation_tree$cptable[, "xerror"])
+
+cp_opt <- Cancellation_tree$cptable[opt_index, "CP"]
+
+# Establish a list of possible values for minsplit and maxdepth
+minsplit <- seq(1, 4, 1)
+maxdepth <- seq(1, 6, 1)
+
+# Create a data frame containing all combinations
+hyper_grid <- expand.grid(minsplit = minsplit, maxdepth = maxdepth)
+
+# Check out the grid
+head(hyper_grid)
+
+# Print the number of grid combinations
+nrow(hyper_grid)
+
+# Number of potential models in the grid
+num_models <- nrow(hyper_grid)
+
+# Create an empty list to store models
+Cancellation_tree_models <- list()
+
+# Write a loop over the rows of hyper_grid to train the grid of models
+for (i in 1:num_models) {
+
+# Get minsplit, maxdepth values at row i
+minsplit <- hyper_grid$minsplit[i]
+maxdepth <- hyper_grid$maxdepth[i]
+
+# Train a model and store in the list
+Cancellation_tree_models[[i]] <- rpart(formula = fml, data = Taxi_train,method = "anova",minsplit = minsplit,maxdepth = maxdepth)
+}
+
+# Number of potential models in the grid
+num_models <- length(Cancellation_tree_models)
+
+# Create an empty vector to store RMSE values
+rmse_values <- c()
+
+# Write a loop over the models to compute validation RMSE
+for (i in 1:num_models) {
+
+# Retreive the i^th model from the list
+model <- Cancellation_tree_models[[i]]
+
+# Generate predictions on grade_valid
+pred <- predict(object = model, newdata = Taxi_test)
+
+# Compute validation RMSE and add to the
+rmse_values[i] <- rmse(actual = Taxi_test$Car_Cancellation,predicted = pred)
+}
+
+# Identify the model with smallest validation set RMSE
+best_model <- Cancellation_tree_models[[which.min(rmse_values)]]
+
+# Print the model parameters of the best model
+best_model$control
+
+#build the best model with optimal parameters
+Cancellation_tree_best_model <- rpart(fml,data = Taxi_train, method = "class", cp = 0.00001, minsplit = 2, maxdepth = 4, xval = 10,
+                                      usesurrogate = 2, surrogatestyle = 0, maxsurrogate = 4, maxcompete = 4, minbucket = 1)
+
+Cancellation_tree_best_model
+
+
+```
+
+1-4.Compute the Confusion Matrix, prune and plot the tree
+
+```{r}
+#predication by using validation data
+Cancellation_pred <- predict(Cancellation_tree_best_model, Taxi_test, type = "class")
+
+#build confusion matrix
+confusionMatrix(data = Cancellation_pred,reference = Taxi_test$Car_Cancellation) 
+
+#prune tree 
+Cancellation_prune_tree <- prune(Cancellation_tree_best_model, cp = cp_opt)
+
+#plot tree
+prp(Cancellation_prune_tree, type = 1, extra = 1, under = TRUE, split.font = 1, varlen = -10, 
+    box.col=ifelse(Cancellation_tree$frame$var == "<leaf>", 'gray', 'white'),main="Pruned Classification Tree for Taxi Cancellation")  
+
+```
+
+1-5.Model interpretation
+
+Following the branches of the decision tree, the decision rules can be displayed as below:
+1). If the booking happens in the fourth quarter, the model of the vehicle = 23, 24, 28, 30, 54, 85, 87, 90 or 91, the ID of the package ≠ 1, 2, 3, 6, 7 nor null and the model of the vehicle ≠ 24 and 90, the booking will be cancelled. 
+
+2). If the booking happens in the fourth quarter, the model of the vehicle ≠ 23, 24, 28, 30, 54, 85, 87, 90 or 91, the booking was not done on desktop website and the leading time >= 16 days, the booking will be cancelled. 
+
+3). Under other circumstances, the booking will not be cancelled. 
+
+
+1-6.Confusion matrices and performance evaluation
+
+The confusion matrix and related statistics is displayed below:
+
+             Reference
+Prediction    0    1
+         0 2754(TP)  203(FP)
+         1    2(FN)   11(TN)
+           
+Our above analysis indicates that 2754 out of 2970 bookings are not cancelled, and the predication is true. Our group also predicts that 11 out of 2970 bookings are cancelled, and the predication is ture as well. But mistakes happen. We predicted 203 out of 2970 bookings are not cancelled but in reality they are cancelled; another two bookings are not cancelled in the real world but we predicted they would be cancelled.
+
+Despite the estimated error, overall our group acquired a high-accuracy model with a accuracy rate of 93.1%. The Mcnemar's Test P-Value of our model is less than 0.05, which also indicates the high-accuracy of our model.
+
+
+
+Part 2. Model Test
+
+2-1.Test the model using new data
+```{r, message=FALSE, echo=TRUE}
+
+Taxi.new<- read.csv("Taxi_new.csv")
+
+#get time as numeric format
+Taxi.new$from_time <- Taxi.new$from_date%%1
+Taxi.new$booking_time<- Taxi.new$booking_created%%1
+
+#Binning peak and non-peak hours
+# Under the assumption that 8:00 am - 12:00 pm and 4:00 pm - 8:00 pm are the peak hours. One evidence of showing this as a fact is that the Bangalore government bans certain types of trucks from entering the Bangalore city. 
+Taxi.new$from_hours = "0"
+Taxi.new[Taxi.new$from_time <= 1/3 | Taxi.new$from_time > 11/24 & Taxi.new$from_time <= 2/3 | Taxi.new$from_time > 5/6 ,]$from_hours = "Peak"
+Taxi.new[Taxi.new$from_time > 1/3 & Taxi.new$from_time <= 11/24 | Taxi.new$from_time > 2/3 & Taxi.new$from_time <= 5/6 ,]$from_hours = "Normal"
+
+Taxi.new$booking_hours = "0"
+Taxi.new[Taxi.new$booking_time <= 1/3 | Taxi.new$booking_time > 11/24 & Taxi.new$booking_time <= 2/3 | Taxi.new$booking_time > 5/6 ,]$booking_hours = "Peak"
+Taxi.new[Taxi.new$booking_time > 1/3 & Taxi.new$booking_time <= 11/24 | Taxi.new$booking_time > 2/3 & Taxi.new$booking_time <= 5/6 ,]$booking_hours = "Normal"
+
+#Convert the date and time format
+Taxi.new$from_date <- convertToDateTime(Taxi.new$from_date, tx = "Asia/Colombo")
+Taxi.new$booking_created<- convertToDateTime(Taxi.new$booking_created, tx = "Asia/Colombo")  
+
+#Extract Month and Weekday from trip starting
+Taxi.new$from_month <- month(Taxi.new$from_date)
+Taxi.new$from_weekday <- wday(Taxi.new$from_date)
+#Taxi.new$from_time <- strftime(Taxi.new$from_date, format="%H/%M/%S")
+
+#Extract Month and Weekday from booking
+Taxi.new$booking_month <- month(Taxi.new$booking_created)
+Taxi.new$booking_weekday <- wday(Taxi.new$booking_created)
+#Taxi.new$booking_time <- strftime(Taxi.new$booking_created, format="%H:%M:%S")
+
+#calculate the lead hours between booking time and trip start time
+Taxi.new$lead_day <- time_length(interval(Taxi.new$booking_created,Taxi.new$from_date),"day")
+
+#Binning the months into quarters
+Taxi.new$from_quarter = "0"
+Taxi.new[Taxi.new$from_month <= 3,]$from_quarter = "Q1"
+Taxi.new[Taxi.new$from_month > 3 & Taxi.new$from_month <= 6,]$from_quarter = "Q2"
+Taxi.new[Taxi.new$from_month > 6 & Taxi.new$from_month <= 9,]$from_quarter = "Q3"
+Taxi.new[Taxi.new$from_month > 9,]$from_quarter = "Q4"
+
+Taxi.new$booking_quarter = "0"
+Taxi.new[Taxi.new$booking_month <= 3,]$booking_quarter = "Q1"
+Taxi.new[Taxi.new$booking_month > 3 & Taxi.new$booking_month <= 6,]$booking_quarter = "Q2"
+Taxi.new[Taxi.new$booking_month > 6 & Taxi.new$booking_month <= 9,]$booking_quarter = "Q3"
+Taxi.new[Taxi.new$booking_month > 9,]$booking_quarter = "Q4"
+
+#Binning the weekday to Weekday and Weekend
+Taxi.new$from_week = "0"
+Taxi.new[Taxi.new$from_weekday <= 5,]$from_week = "Weekday"
+Taxi.new[Taxi.new$from_weekday > 5 ,]$from_week = "Weekend"
+
+Taxi.new$booking_week = "0"
+Taxi.new[Taxi.new$booking_weekday <= 5,]$booking_week = "Weekday"
+Taxi.new[Taxi.new$booking_weekday > 5 ,]$booking_week = "Weekend"
+
+#Reduce dimensions
+Taxi.new = Taxi.new[,-c(1:2,6:11,14:18,19:20,23:26)]
+
+#Check the new data frame
+head(Taxi.new)
+
+```
+
+Input variables data fields:
+
+Same as we did for the Taxi_case dataset, but these data is from the "Taxi.new" dataset. Basically what we did in this data tidying and formating process are the same as we did for the "taxi_case" dataset.
+
+*vehicle_model_id - vehicle model type
+
+*package_id - type of package (1=4hrs & 40kms, 2=8hrs & 80kms, 3=6hrs & 60kms, 4= 10hrs & 100kms, 5=5hrs & 50kms, 6=3hrs & 30kms,7=12hrs & 120kms)
+
+*travel_type_id - type of travel (1=long distance, 2= point to point, 3= hourly rental)
+
+*online_booking - if booking was done on desktop website
+
+*mobile_site_booking - if booking was done on mobile website
+
+*from_hours - divide trip starting hour as "peak" or "normal" time
+
+*booking_hours - divide booking hour as "peak" or "normal" time
+
+*lead_day - the lead time between booking time and trip starting time, unit is day
+
+*from_quarter - divide trip starting months into 4 quarters as "Q1", "Q2","Q3" and "Q4"
+
+*booking_quarter - divide booking months into 4 quarters as "Q1", "Q2","Q3" and "Q4"
+
+*from_week - divide trip starting week into "weekday" and "weekend"
+
+*booking_week - divide booking week into "weekday" and "weekend"
+
+
+2-2.Convert data type
+
+```{r}
+# Covert all categorical variables to factors
+Taxi.new$vehicle_model_id <- as.factor(Taxi.new$vehicle_model_id)
+
+Taxi.new$package_id <- as.factor(Taxi.new$package_id)
+
+Taxi.new$travel_type_id <- as.factor(Taxi.new$travel_type_id)
+
+Taxi.new$online_booking <- as.factor(Taxi.new$online_booking)
+
+Taxi.new$mobile_site_booking <- as.factor(Taxi.new$mobile_site_booking)
+
+Taxi.new$from_hours <- as.factor(Taxi.new$from_hours)
+
+Taxi.new$booking_hours <- as.factor(Taxi.new$booking_hours)
+
+Taxi.new$from_week <- as.factor(Taxi.new$from_week )
+
+Taxi.new$booking_week <- as.factor(Taxi.new$from_week)
+
+#Round the lead time by day unit
+Taxi.new$lead_day <- round(as.numeric(Taxi.new$lead_day),1)
+
+```
+
+
+2-3.Predicting by using new data
+
+```{R}
+# Generate predicted classes using the model object
+
+Taxi.new$cancellation_prediction <- predict(object = Cancellation_tree_best_model,    
+                            newdata = Taxi.new,  
+                            type = "class")  # return classification labels
+
+# Print the predicted classes
+print(Taxi.new$cancellation_prediction)
+
+#Creat output with predication result
+write.csv(Taxi.new,'Taxi.new_pred.csv')
+
+```
+
+2-4.Prediction results
+
+After running predictions on Taxi_new data, it can be found that the new data set contains only 1 cancellation, which means that the overall cancellation is 1%. Considering the small subset of our data (only 100 observations), we expect a small number of predicted cancellations (smaller than the overall cancellation rate provided in the case-7% to 8%). 
+
+This only cancellation exists in Row 60 and the vehicle model ID is 12. This cancellation happens in peak time at the fourth quarter during weekdays(Monday to Friday) and the leading time is 25.2 days. 
+
+
+Part 3. Future Model Improvements Recommendation
+
+This whole predication process is both illuminating and instructive. For future improvements, the distance between driver and customer and customer's user-rating are two important variables that can be included to improve the accuracy of our model, since currently time factor is the only primary factor we use in our predication. Because in peak hours, if the distances between customers and drivers are long, the drivers will tend to cancel their reservation. If the customer's user-rating is low, the drivers may also tend to cancel the reservation because they are afraid of bad driving experience.
+
+Also, the current week data can be further subdivided, for example, in above predication analysis, we only divided the data into weekdays vs. weekends and peak vs. normal hours. But in reality this classification may vary based on the particularity of specified region and time. For example, the peak time of Friday may be longer than others because it is the last day of work. The predication result will be more accurate if we divide the data in line with the actual local situation. 

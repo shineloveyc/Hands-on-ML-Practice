@@ -1,0 +1,259 @@
+---
+title: "Group_Project_1"
+author: 'Shine,Jason,Kong  '
+date: "1/30/2018"
+output:
+  word_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+
+load the packages
+```{r, warning=FALSE, message=FALSE}
+library(tidyverse)   # loads a number of helpful Hadley Wickham packages
+library(ggplot2)     # way better than Base plotting
+library(tidyr)       # newer replacement for package Reshape
+library(rpart)
+library(rpart.plot)
+library(caret)
+library(openxlsx)
+library(lubridate)
+library(Metrics)
+```
+
+1. Read the data of Taxi_case csv file
+
+```{r, message=FALSE, echo=TRUE}
+
+Taxi.df<- read.csv("~/Google Drive/2018 Spring Course/Big Data 2/My R Work/Team Project 1/BigDataII_Project1/Taxi_case.csv")
+
+#get time as numeric format
+Taxi.df$from_time <- Taxi.df$from_date%%1
+Taxi.df$booking_time<- Taxi.df$booking_created%%1
+
+#Binning peak and non-peak hours
+# Under the assumption that 8:00 am - 12:00 pm and 4:00 pm - 8:00 pm are the peak hours. One evidence of showing this as a fact is that the Bangalore government bans certain types of trucks from entering the Bangalore city. 
+Taxi.df$from_hours = "0"
+Taxi.df[Taxi.df$from_time <= 1/3 | Taxi.df$from_time > 11/24 & Taxi.df$from_time <= 2/3 | Taxi.df$from_time > 5/6 ,]$from_hours = "Peak"
+Taxi.df[Taxi.df$from_time > 1/3 & Taxi.df$from_time <= 11/24 | Taxi.df$from_time > 2/3 & Taxi.df$from_time <= 5/6 ,]$from_hours = "Normal"
+
+Taxi.df$booking_hours = "0"
+Taxi.df[Taxi.df$booking_time <= 1/3 | Taxi.df$booking_time > 11/24 & Taxi.df$booking_time <= 2/3 | Taxi.df$booking_time > 5/6 ,]$booking_hours = "Peak"
+Taxi.df[Taxi.df$booking_time > 1/3 & Taxi.df$booking_time <= 11/24 | Taxi.df$booking_time > 2/3 & Taxi.df$booking_time <= 5/6 ,]$booking_hours = "Normal"
+
+#Convert the date and time format
+Taxi.df$from_date <- convertToDateTime(Taxi.df$from_date, tx = "Asia/Colombo")
+Taxi.df$booking_created<- convertToDateTime(Taxi.df$booking_created, tx = "Asia/Colombo")  
+
+#Extract Month and Weekday from trip starting
+Taxi.df$from_month <- month(Taxi.df$from_date)
+Taxi.df$from_weekday <- wday(Taxi.df$from_date)
+#Taxi.df$from_time <- strftime(Taxi.df$from_date, format="%H/%M/%S")
+
+#Extract Month and Weekday from booking
+Taxi.df$booking_month <- month(Taxi.df$booking_created)
+Taxi.df$booking_weekday <- wday(Taxi.df$booking_created)
+#Taxi.df$booking_time <- strftime(Taxi.df$booking_created, format="%H:%M:%S")
+
+#calculate the lead hours between booking time and trip start time
+Taxi.df$lead_day <- time_length(interval(Taxi.df$booking_created,Taxi.df$from_date),"day")
+
+#Binning the months into quarters
+Taxi.df$from_quarter = "0"
+Taxi.df[Taxi.df$from_month <= 3,]$from_quarter = "Q1"
+Taxi.df[Taxi.df$from_month > 3 & Taxi.df$from_month <= 6,]$from_quarter = "Q2"
+Taxi.df[Taxi.df$from_month > 6 & Taxi.df$from_month <= 9,]$from_quarter = "Q3"
+Taxi.df[Taxi.df$from_month > 9,]$from_quarter = "Q4"
+
+Taxi.df$booking_quarter = "0"
+Taxi.df[Taxi.df$booking_month <= 3,]$booking_quarter = "Q1"
+Taxi.df[Taxi.df$booking_month > 3 & Taxi.df$booking_month <= 6,]$booking_quarter = "Q2"
+Taxi.df[Taxi.df$booking_month > 6 & Taxi.df$booking_month <= 9,]$booking_quarter = "Q3"
+Taxi.df[Taxi.df$booking_month > 9,]$booking_quarter = "Q4"
+
+#Binning the weekday to Weekday and Weekend
+Taxi.df$from_week = "0"
+Taxi.df[Taxi.df$from_weekday <= 5,]$from_week = "Weekday"
+Taxi.df[Taxi.df$from_weekday > 5 ,]$from_week = "Weekend"
+
+Taxi.df$booking_week = "0"
+Taxi.df[Taxi.df$booking_weekday <= 5,]$booking_week = "Weekday"
+Taxi.df[Taxi.df$booking_weekday > 5 ,]$booking_week = "Weekend"
+
+#Reduce dimensions
+Taxi.df = Taxi.df[,-c(1:2,6:11,14:18,20:21,24:27)]
+
+#Check the new data frame
+
+head(Taxi.df)
+
+```
+Input variables data fields:
+
+vehicle_model_id - vehicle model type
+
+package_id - type of package (1=4hrs & 40kms, 2=8hrs & 80kms, 3=6hrs & 60kms, 4= 10hrs & 100kms, 5=5hrs & 50kms, 6=3hrs & 30kms,7=12hrs & 120kms)
+
+travel_type_id - type of travel (1=long distance, 2= point to point, 3= hourly rental)
+
+online_booking - if booking was done on desktop website
+
+mobile_site_booking - if booking was done on mobile website
+
+from_hours - divide trip starting hour as "peak" or "normal" time
+
+booking_hours - divide booking hour as "peak" or "normal" time
+
+lead_day - the lead time between booking time and trip starting time, unit is day
+
+from_quarter - divide trip starting months into 4 quarters as "Q1", "Q2","Q3" and "Q4"
+
+booking_quarter - divide booking months into 4 quarters as "Q1", "Q2","Q3" and "Q4"
+
+from_week - divide trip starting week into "weekday" and "weekend"
+
+booking_week - divide booking week into "weekday" and "weekend"
+
+
+
+
+2.Convert data type
+
+```{r}
+# Covert all categorical variables to factors
+Taxi.df$vehicle_model_id <- as.factor(Taxi.df$vehicle_model_id)
+
+Taxi.df$package_id <- as.factor(Taxi.df$package_id)
+
+Taxi.df$travel_type_id <- as.factor(Taxi.df$travel_type_id)
+
+Taxi.df$online_booking <- as.factor(Taxi.df$online_booking)
+
+Taxi.df$mobile_site_booking <- as.factor(Taxi.df$mobile_site_booking)
+
+Taxi.df$from_hours <- as.factor(Taxi.df$from_hours)
+
+Taxi.df$booking_hours <- as.factor(Taxi.df$booking_hours)
+
+Taxi.df$from_week <- as.factor(Taxi.df$from_week )
+
+Taxi.df$booking_week <- as.factor(Taxi.df$from_week)
+
+#Round the lead time by day unit
+Taxi.df$lead_day <- round(as.numeric(Taxi.df$lead_day),1)
+
+```
+
+
+3.Build train data/test data and the model
+
+```{r}
+# Set random seed. Don't remove this line.
+set.seed(1234)
+
+# Shuffle the dataset; build train and test at 7:3
+n <- nrow(Taxi.df)
+shuffled <- Taxi.df[sample(n),]
+Taxi_train <- shuffled[1:round(0.7 * n),]
+
+Taxi_test <- shuffled[(round(0.7 * n) + 1):n,]
+
+#build default model
+fml <- Car_Cancellation ~.
+
+Cancellation_tree <- rpart(fml,data = Taxi_train, method = "class")
+
+Cancellation_tree$cptable
+
+#find the optional hyperparameter
+
+opt_index <- which.min(Cancellation_tree$cptable[, "xerror"])
+
+cp_opt <- Cancellation_tree$cptable[opt_index, "CP"]
+
+Cancellation_tree <- rpart(fml,data = Taxi_train, method = "class")
+
+# Establish a list of possible values for minsplit and maxdepth
+minsplit <- seq(1, 4, 1)
+maxdepth <- seq(1, 6, 1)
+
+# Create a data frame containing all combinations
+hyper_grid <- expand.grid(minsplit = minsplit, maxdepth = maxdepth)
+
+# Check out the grid
+head(hyper_grid)
+
+# Print the number of grid combinations
+nrow(hyper_grid)
+
+# Number of potential models in the grid
+num_models <- nrow(hyper_grid)
+
+# Create an empty list to store models
+Cancellation_tree_models <- list()
+
+# Write a loop over the rows of hyper_grid to train the grid of models
+for (i in 1:num_models) {
+
+# Get minsplit, maxdepth values at row i
+minsplit <- hyper_grid$minsplit[i]
+maxdepth <- hyper_grid$maxdepth[i]
+
+# Train a model and store in the list
+Cancellation_tree_models[[i]] <- rpart(formula = fml, data = Taxi_train,method = "anova",minsplit = minsplit,maxdepth = maxdepth)
+}
+
+# Number of potential models in the grid
+num_models <- length(Cancellation_tree_models)
+
+# Create an empty vector to store RMSE values
+rmse_values <- c()
+
+# Write a loop over the models to compute validation RMSE
+for (i in 1:num_models) {
+
+# Retreive the i^th model from the list
+model <- Cancellation_tree_models[[i]]
+
+# Generate predictions on grade_valid
+pred <- predict(object = model, newdata = Taxi_test)
+
+# Compute validation RMSE and add to the
+rmse_values[i] <- rmse(actual = Taxi_test$Car_Cancellation,predicted = pred)
+}
+
+# Identify the model with smallest validation set RMSE
+best_model <- Cancellation_tree_models[[which.min(rmse_values)]]
+
+# Print the model parameters of the best model
+best_model$control
+
+#build the best model with optimal parameters
+Cancellation_tree_best_model <- rpart(fml,data = Taxi_train, method = "class", cp = 0.00001, minsplit = 2, maxdepth = 4, xval = 10,
+                                      usesurrogate = 2, surrogatestyle = 0, maxsurrogate = 4, maxcompete = 4, minbucket = 1)
+
+Cancellation_tree_best_model
+
+
+```
+
+5.Compute the Confusion Matrix and Plot the Tree
+
+```{r}
+
+Cancellation_pred <- predict(Cancellation_tree_best_model, Taxi_test, type = "class")
+
+confusionMatrix(data = Cancellation_pred,reference = Taxi_test$Car_Cancellation) 
+
+prp(Cancellation_tree_best_model, type = 1, extra = 1, under = TRUE, split.font = 1, varlen = -10, 
+    box.col=ifelse(Cancellation_tree$frame$var == "<leaf>", 'gray', 'white'))  
+
+```
